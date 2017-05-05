@@ -1,17 +1,16 @@
 ﻿XYZ Relay makes it easy to connect two computers both behind NAT using a relay server.  As easy as X -> Y -> Z. 
 
                   
- client     NAT    relay    NAT     server
-             |               |
-   X --------|------ Y ------|-------- Z
-             |               |
+    client     NAT    relay    NAT     server
+                |               |
+      X --------|------ Y ------|-------- Z
+                |               |
 
 Figure 1.1 These three programs move or copy a TCP port from one private network to another using a relay program running on a computer that is visible to both computers.
 
 
 
-Example
---------------------------------
+# Example
 
 A webserver named Web has an HTTP server on port 80 in a far-off network that you want to access from your laptop (Lappy).  Using XYZ you can.
 
@@ -21,24 +20,23 @@ Connect Lappy to Web by doing the following:
 
 1. Start the relay on Relay with:
 
-   ./Y :5000
+        ./Y :5000
 
 2. Connect Web's port 80 to Relay with:
 
-   ./Z -noverify 99.88.77.66:5000 :80
+        ./Z -noverify 99.88.77.66:5000 :80
 
 3. Connect Relay to port :8080 on Lappy:
 
-   ./X -noverify 99.88.77.66:5000 :8080
+        ./X -noverify 99.88.77.66:5000 :8080
 
 Now on Lappy you can access Web like this:
 
-   curl http://127.0.0.1:8080
+        curl http://127.0.0.1:8080
 
 
 
-Forwarding
-------------------------
+# Forwarding
 
 A server named DMZ can access port 5432 on a server named DB in a far-off network that you want to access from your laptop (Lappy).  Using XYZ you can do this too.
 
@@ -48,193 +46,168 @@ Connect Lappy to DB by doing the following:
 
 1. Start the relay on Relay with:
 
-   ./Y :5000
+        ./Y :5000
 
 2. Connect DB's port 5432 to Relay with:
 
-   ./Z -noverify 99.88.77.66:5000 DB:5432
+        ./Z -noverify 99.88.77.66:5000 DB:5432
 
 3. Connect Relay to port :8080 on Lappy:
 
-   ./X -noverify 99.88.77.66:5000 :8080
+        ./X -noverify 99.88.77.66:5000 :8080
 
 
 
-Authentication
---------------------------------
+# Authentication
 
 The relay (Y) can authenticate X and Z clients in the following ways.  Both methods of authentication can be combined:
 
 
 
 
-Certificates
-~~~~~~~~~~~~
+## Certificates
+
 To have Y authenticate X/Z using client-side certificates, start Y with:
 
 
-        ./Y -cert mycert -key mykey -ca myca -verify :5000
+    ./Y -cert mycert -key mykey -ca myca -verify :5000
 
 
 Then connect X or Z in a similar manner:
 
 
-        ./Z -cert mycert -key mykey -ca myca 9.8.7.6:5000 :4444
+    ./Z -cert mycert -key mykey -ca myca 9.8.7.6:5000 :4444
 
 
 By default, X/Z will verify Y's certificate, but can be disabled with the `-noverify` option.
 
 
+## Custom Authentication
 
-
-Custom Authentication
-~~~~~~~~~~~~~~~~~~~~~
 To perform custom authentication use the `-auth` option.  To illustrate this, we'll run Y and Z on the same server.
 
 
 Start the relay (Y) with a custom auth script:
 
 
-        ./Y -auth checkpassword.sh :5000
+    ./Y -auth checkpassword.sh :5000
 
 
 At this point, `checkpassword.sh` has not been executed.  Next connect Z to the relay with a custom auth-submission script:
 
 
-        ./Z -auth generatepassword.sh :5000 :4444
+    ./Z -auth generatepassword.sh :5000 :4444
 
 
 Immediately, `generatepassword.sh` is executed and the stdout is sent to Y to become the stdin in `checkpassword.sh`.  In this localhost example, it's identical to this:
 
 
-        ./generatepassword.sh | ./checkpassword.sh
+    ./generatepassword.sh | ./checkpassword.sh
 
 
 If `checkpassword.sh` exits with 0 authentication proceeds, otherwise authentication fails.  The stdout of `checkpassword.sh` is used to name the connected client (see Z names below).
 
 
-
-
-Combinations
-~~~~~~~~~~~~
-
+## Authentication combinations
 
 Y authenticating X/Z can be combined in many ways.  Here's a sampling:
 
 
 1. Y will authenticate X/Z using `auth.sh`.
 
-
-./Y -auth auth.sh :5000
-./Z -noverify -auth sendauth.sh 9.8.7.6:5000 :443
-./X -noverify -auth sendauth.sh 9.8.7.6:5000 :8443
+        ./Y -auth auth.sh :5000
+        ./Z -noverify -auth sendauth.sh 9.8.7.6:5000 :443
+        ./X -noverify -auth sendauth.sh 9.8.7.6:5000 :8443
 
 
 2. Y will authenticate X/Z using client-side certificates.
 
-
         ./Y -verify ca.crt :5000
         ./Z -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :443
-./X -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :8443
+        ./X -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :8443
 
 
 3. Y will authenticate X/Z using EITHER `auth.sh` or client certificates.
 
-
         ./Y -auth auth.sh -verify ca.crt :5000
         ./Z -noverify -auth sendauth.sh 9.8.7.6:5000 :443
-./X -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :8443
+        ./X -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :8443
 
 
 X/Z can also authenticate Y.  You may have noticed that `-noverify` has been used a lot in these modest examples.  The better option is to run Y with verifiable TLS enabled (as shown in the following command).  Then X/Z clients will verify the server by default (and must be run with -ca):
 
-
-./Y -cert relay.crt -key relay.key -ca ca.crt :5000
-./Z -ca ca.crt 9.8.7.6:5000 :443
-./X -ca ca.crt 9.8.7.6:5000 :8443
-
+    ./Y -cert relay.crt -key relay.key -ca ca.crt :5000
+    ./Z -ca ca.crt 9.8.7.6:5000 :443
+    ./X -ca ca.crt 9.8.7.6:5000 :8443
 
 
-Z names
-~~~~~~~
+
+## Z names
+
 Z clients are named depending on the authentication method used.  In all cases, when there are name conflicts, random numbers are added.
 
-
 For client-side certificate authentication, the Z name will be the common name on the certificate.
-
 
 For `-auth` authentication, the Z name will be up to the first 30 bytes of stdout from Y running its `-auth` script.
 
 
 
-Multiple Servers per Relay
---------------------------------
+# Multiple Servers per Relay
 
 A single running Y program can handle many simultaneous connections from Xs and Zs.  But once there is more than one server (Z) connected, clients (X) must specify which server (Z) they want to connect to.  For instance, if we forward 2 ports:
 
-
-./Z 9.8.7.6:5000 :3333
-./Z 9.8.7.6:5000 :4444
-
+    ./Z 9.8.7.6:5000 :3333
+    ./Z 9.8.7.6:5000 :4444
 
 Each of those connections will get a name from the relay (Y) which can be found with `./X who` (See Z names above for more information).  For instance:
 
-
-        ./X who 9.8.7.6:5000
-zBQaIKhYLzbgaH
-24kbrmscmIuYuG
+    ./X who 9.8.7.6:5000
+    zBQaIKhYLzbgaH
+    24kbrmscmIuYuG
 
 
 Connections by `X` must include the name:
 
-
-        ./X 9.8.7.6:5000 :80 @zBQaIKhYLzbgaH
-
+    ./X 9.8.7.6:5000 :80 @zBQaIKhYLzbgaH
 
 
-
-
-
-Multiple Relays per X/Z
---------------------------------
+# Multiple Relays per X/Z
 
 
 The X and Z programs may connect to more than one Y as well:
 
-        ./Z :4000 230.90.90.90:5000 :4002 231.90.90.91:3434   
-./X 230.90.90.90:5000 :3000 @24kbrmscmIuYuG 231.90.90.91:3434 127.0.0.1:2000
-./X 9.8.7.6:5000 :80 @zBQaIKhYLzbgaH :9090 @24kbrmscmIuYuG 7.6.5.3:5000 :8080 @grog
+    ./Z :4000 230.90.90.90:5000 :4002 231.90.90.91:3434   
+    ./X 230.90.90.90:5000 :3000 @24kbrmscmIuYuG 231.90.90.91:3434 127.0.0.1:2000
+    ./X 9.8.7.6:5000 :80 @zBQaIKhYLzbgaH :9090 @24kbrmscmIuYuG 7.6.5.3:5000 :8080 @grog
 
 
-
-Commands
---------------------------------
+# Commands
 
 The X client can also run commands on Z clients like this:
 
-X run [ip:port of Y] [name of client] (optional name of script)
+    X run [ip:port of Y] [name of client] (optional name of script)
 
-   ./X run 230.90.90.90:5000 client1
+    ./X run 230.90.90.90:5000 client1
 
-   ./X run 230.90.90.90:5000 client1 script1
+    ./X run 230.90.90.90:5000 client1 script1
 
 The script to run is defined like this:
 
-Z [port to send] [ip:port of Y] (-- [optional script] -- [optional script] ...)
+    Z [port to send] [ip:port of Y] (-- [optional script] -- [optional script] ...)
 
-   ./Z :2020 209.43.23.1:4000 -- ./script1 -- /home/frog/script2
-
-
+    ./Z :2020 209.43.23.1:4000 -- ./script1 -- /home/frog/script2
 
 
-Usage
---------------------------------
 
 
+# Usage
+
+
+```
 X [OPTIONS] RELAY REMOTE [RELAY REMOTE...]
 X [OPTIONS] run RELAY
 X [OPTIONS] who RELAY [RELAY...]
+```
 
-
-Where RELAY is RELAY_HOST:RELAY_PORT
-Where REMOTE is [BIND_ADDRESS]:BIND_PORT[ @REMOTE_NAME]
+Where `RELAY` is `RELAY_HOST:RELAY_PORT`
+Where `REMOTE` is `[BIND_ADDRESS]:BIND_PORT[ @REMOTE_NAME]`
