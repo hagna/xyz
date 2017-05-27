@@ -50,8 +50,22 @@ func pemBlockForKey(priv interface{}) *pem.Block {
 	}
 }
 
-// helper for GenerateCA
-func MkCert(host string, rsaBits int, ecdsaCurve string, validFrom string, validFor time.Duration, isCA bool, parent *x509.Certificate) (pem.Block, pem.Block, error) {
+func Ca(host string, rsaBits int, ecdsaCurve string, validFrom string, validFor time.Duration) (pem.Block, pem.Block, error) {
+
+	a := &PkiArgs{host: host, rsaBits: rsaBits, ecdsaCurve: ecdsaCurve, validFrom: validFrom, validFor: validFor, isCA: true}
+	return mkCert(a)
+}
+
+// helper for Ca and GenerateCA
+func mkCert(a *PkiArgs) (pem.Block, pem.Block, error) {
+	isX := a.isX
+	isCA := a.isCA
+	validFor := a.validFor
+	validFrom := a.validFrom
+	ecdsaCurve := a.ecdsaCurve
+	host := a.host
+	rsaBits := a.rsaBits
+	parent := a.parent
 	if len(host) == 0 {
 		log.Fatalf("Missing required --host parameter")
 	}
@@ -92,6 +106,9 @@ func MkCert(host string, rsaBits int, ecdsaCurve string, validFrom string, valid
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
+	}
+	if isX {
+		template.Subject.OrganizationalUnit = []string{"X"}
 	}
 
 	hosts := strings.Split(host, ",")
@@ -173,8 +190,28 @@ func mkKey(ecdsaCurve string, rsaBits int) (interface{}, error) {
 	return priv, err
 }
 
+type PkiArgs struct {
+	host       string
+	rsaBits    int
+	ecdsaCurve string
+	validFrom  string
+	validFor   time.Duration
+	isCA       bool
+	isX        bool
+	ca         *tls.Certificate
+	parent     *x509.Certificate
+}
+
 // helpd GenerateSignedCertificate create a csr etc.
-func mkSignedCert(host string, rsaBits int, ecdsaCurve string, validFrom string, validFor time.Duration, isCA bool, ca tls.Certificate) (pem.Block, pem.Block, error) {
+func mkSignedCert(a *PkiArgs) (pem.Block, pem.Block, error) {
+	ca := a.ca
+	isX := a.isX
+	isCA := a.isCA
+	validFor := a.validFor
+	validFrom := a.validFrom
+	ecdsaCurve := a.ecdsaCurve
+	host := a.host
+	rsaBits := a.rsaBits
 	parents, e := x509.ParseCertificates(ca.Certificate[0])
 	if e != nil {
 		log.Fatalf("could not parse ca certificate: %s", e)
@@ -193,16 +230,18 @@ func mkSignedCert(host string, rsaBits int, ecdsaCurve string, validFrom string,
 
 	csrTemplate := x509.CertificateRequest{
 		Subject: pkix.Name{
-			CommonName:   "test.example.com",
-			Organization: []string{"Σ Acme Co"},
+			Organization: []string{"xyz"},
 		},
 		PublicKey:          publicKey(priv),
 		PublicKeyAlgorithm: x509.RSA,
 		SignatureAlgorithm: x509.SHA256WithRSA,
-		DNSNames:           []string{"test.example.com"},
-		EmailAddresses:     []string{"gopher@golang.org"},
+		//		DNSNames:           []string{""},
+		EmailAddresses: []string{"email"},
 	}
 
+	if isX {
+		csrTemplate.Subject.OrganizationalUnit = []string{"X"}
+	}
 	hosts := strings.Split(host, ",")
 	for _, h := range hosts {
 		if ip := net.ParseIP(h); ip != nil {
@@ -285,7 +324,7 @@ func mkSignedCert(host string, rsaBits int, ecdsaCurve string, validFrom string,
 }
 
 // Create signed cert from ca
-func CaSignedCert(host string, rsaBits int, ecdsaCurve string, validFrom string, validFor time.Duration, isCA bool, ca *tls.Certificate) (pem.Block, pem.Block, error) {
+func CaSignedCert(host string, rsaBits int, ecdsaCurve string, validFrom string, validFor time.Duration, isCA bool, isX bool, ca *tls.Certificate) (pem.Block, pem.Block, error) {
 	if ca == nil {
 		parentcert, e := ioutil.ReadFile("0.cert")
 		if e != nil {
@@ -299,7 +338,7 @@ func CaSignedCert(host string, rsaBits int, ecdsaCurve string, validFrom string,
 		}
 	}
 
-	cert, priv, err := mkSignedCert(host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, *ca)
+	cert, priv, err := mkSignedCert(&PkiArgs{host: host, rsaBits: rsaBits, ecdsaCurve: ecdsaCurve, validFrom: validFrom, validFor: validFor, isCA: isCA, ca: ca, isX: isX})
 	if err != nil {
 		log.Fatalf("failed to make signed cert %s", err)
 	}
@@ -317,8 +356,9 @@ func GenerateSignedCertificate(c *cli.Context) error {
 
 	validFor := c.Duration("duration")
 	isCA := c.Bool("ca")
+	isX := c.Bool("x")
 
-	cert, priv, err := CaSignedCert(host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, nil)
+	cert, priv, err := CaSignedCert(host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, isX, nil)
 	keyno := getMaxName()
 	var certname = keyno + ".cert"
 	var keyname = keyno + ".key"
@@ -352,8 +392,7 @@ func GenerateCA(c *cli.Context) error {
 	validFrom := c.String("start-date")
 
 	validFor := c.Duration("duration")
-	isCA := true
-	cert, key, err := MkCert(host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, nil)
+	cert, key, err := Ca(host, rsaBits, ecdsaCurve, validFrom, validFor)
 	if err != nil {
 		log.Fatalf("failed to create certificate: %s", err)
 	}
