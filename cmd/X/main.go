@@ -1,16 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"github.com/hagna/xyz"
+	"github.com/hagna/xyz/internal"
 	"github.com/hashicorp/yamux"
 	"github.com/urfave/cli"
-	"io"
 	"io/ioutil"
 	"log"
 	"math"
@@ -26,20 +24,18 @@ const (
 	MESSAGELENGTH = 4
 	MAXMSGLENGTH  = 2048
 	TOKENLENGTH   = 1024
-	PROXYCHUNK    = 1024
 )
 
 var (
-	heartbeatinterval    = 2 * time.Minute   /* time between beats */
-	relayidletimeout     = 100 * time.Second /* idle timeout for the local to relay connection */
-	certificate          string              /* file name containing a TLS ceritifcate */
-	certificateauthority string              /* file containing certificateauthority */
-	privatekey           string              /* file containing the private TLS key */
-	authscript           string              /* file to exec for an authentication script */
-	networkendpoint      string              /* the host:port or :port address */
-	noverify             bool                /* don't verify client certs */
-	version              = "dev"             /* set by making a release */
-	ARGV                 *cli.Context        /* command line */
+	heartbeatinterval    = 2 * time.Minute /* time between beats */
+	certificate          string            /* file name containing a TLS ceritifcate */
+	certificateauthority string            /* file containing certificateauthority */
+	privatekey           string            /* file containing the private TLS key */
+	authscript           string            /* file to exec for an authentication script */
+	networkendpoint      string            /* the host:port or :port address */
+	noverify             bool              /* don't verify client certs */
+	version              = "dev"           /* set by making a release */
+	ARGV                 *cli.Context      /* command line */
 )
 
 // either use the given values for cert key and ca or generate them anew
@@ -182,42 +178,6 @@ func (r *Relay) Add(conn net.Conn) {
 
 }
 
-// messages look like something like this (ll+aFFesdfbASDFASDsdf112323/sdfasd)
-func send(stream net.Conn, token []byte) (int, error) {
-	message := []byte("(")
-	message = append(message, token...)
-	message = append(message, []byte(")")...)
-	if len(message) > MAXMSGLENGTH {
-		orig := message
-		message = message[:MAXMSGLENGTH-1]
-		message = append(message, []byte(")")...)
-		log.Printf("WARNING truncated send [%d]%v...%v to [%d]%v...%v", len(orig), orig[:10], orig[len(orig)-10:len(orig)], len(message), message[:10], message[len(message)-10:len(message)])
-	}
-	n, err := stream.Write(message)
-	if err != nil {
-		log.Printf("writing token [%d]%s", n, string(message[:n]))
-	}
-	return n, err
-}
-
-// oh wouldn't the devsec people -- ok, they'll never be happy -- but I'm using parenthesis delimited base64 for network messages.
-func recv(stream net.Conn) ([]byte, error) {
-	connio := bufio.NewReader(io.LimitReader(stream, MAXMSGLENGTH))
-	dat, err := connio.ReadBytes(byte(')'))
-	if err != nil {
-		return nil, err
-	}
-	return dat[1 : len(dat)-1], err
-}
-
-// timing out recv
-func recvWithTimeout(conn net.Conn, timeout time.Duration) ([]byte, error) {
-	conn.SetReadDeadline(time.Now().Add(timeout))
-	message, err := recv(conn)
-	conn.SetDeadline(time.Time{})
-	return message, err
-}
-
 type LocalServer struct {
 	ln      net.Listener
 	clients []net.Conn
@@ -234,7 +194,7 @@ func handleLocalClient(conn net.Conn, rc *RelayClient, config *tls.Config, name 
 		conn.Close()
 		return
 	}
-	_, err = send(relayconn, rc.token)
+	_, err = xyz.Send(relayconn, rc.token)
 	if err != nil {
 		log.Printf("Error SendingToken: %s", err)
 		conn.Close()
@@ -242,14 +202,14 @@ func handleLocalClient(conn net.Conn, rc *RelayClient, config *tls.Config, name 
 		return
 	}
 
-	_, err = send(relayconn, []byte(name))
+	_, err = xyz.Send(relayconn, []byte(name))
 	if err != nil {
 		log.Printf("Error sending name: %s", err)
 		conn.Close()
 		relayconn.Close()
 		return
 	}
-	go proxyConn(conn, relayconn)
+	go xyz.ProxyConn(conn, relayconn)
 
 }
 
@@ -260,7 +220,7 @@ func connectRelayClient(config *tls.Config, endpoint string) (*RelayClient, erro
 		log.Println(err)
 		return nil, err
 	}
-	_, err = send(conn, []byte("TOK?"))
+	_, err = xyz.Send(conn, []byte("TOK?"))
 	if err != nil {
 		log.Printf("Error writing token request: %s", err)
 		conn.Close()
@@ -287,7 +247,7 @@ func connectRelayClient(config *tls.Config, endpoint string) (*RelayClient, erro
 	relayclient := new(RelayClient)
 	relayclient.ctl = stream
 	relayclient.session = session
-	relayclient.token, err = recv(stream)
+	relayclient.token, err = xyz.Recv(stream)
 	if err != nil {
 		stream.Close()
 		session.Close()
@@ -393,59 +353,6 @@ func action(c *cli.Context) error {
 	}
 	select {}
 	return nil
-}
-
-func proxyConn(rConn net.Conn, conn net.Conn) {
-
-	timeout := relayidletimeout
-
-	log.Printf("Proxy started between Z (%p) and X (%p)", conn, rConn)
-
-	go func() {
-		defer rConn.Close()
-		defer conn.Close()
-		for {
-			buf := make([]byte, PROXYCHUNK)
-			conn.SetDeadline(time.Now().Add(timeout))
-			n, e := conn.Read(buf)
-			var e1 error
-			if n > 0 {
-				_, e1 = rConn.Write(buf[:n])
-			}
-			if e != nil {
-				log.Printf("Exiting on read %p: %s", rConn, e)
-				break
-			}
-			if e1 != nil {
-				log.Println("Exiting on write %p: %s", conn, e1)
-				log.Println(e1)
-				break
-			}
-		}
-	}()
-
-	go func() {
-		defer rConn.Close()
-		defer conn.Close()
-		for {
-			buf := make([]byte, PROXYCHUNK)
-			rConn.SetDeadline(time.Now().Add(timeout))
-			n, e := rConn.Read(buf)
-			var e1 error
-			if n > 0 {
-				_, e1 = conn.Write(buf[:n])
-			}
-			if e != nil {
-				log.Printf("Exiting on read %p: %s", rConn, e)
-				break
-			}
-			if e1 != nil {
-				log.Println("Exiting on write %p: %s", conn, e1)
-				break
-			}
-		}
-	}()
-
 }
 
 // For holding X's state

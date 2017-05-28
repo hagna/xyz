@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/tls"
@@ -9,10 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
-	"github.com/hagna/xyz"
+	"github.com/hagna/xyz/internal"
 	"github.com/hashicorp/yamux"
 	"github.com/urfave/cli"
-	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -32,18 +30,17 @@ const (
 )
 
 var (
-	relayidletimeout     = 100 * time.Second                          /* idle timeout for the local to relay connection */
-	pruneclientinterval  = 1 * time.Minute                            /* idle timeout for the local to relay connection */
-	certificate          string                                       /* file name containing a TLS ceritifcate */
-	certificateauthority string                                       /* file containing certificateauthority */
-	privatekey           string                                       /* file containing the private TLS key */
-	authscript           string                                       /* file to exec for an authentication script */
-	networkendpoint      string                                       /* the host:port or :port address */
-	noverify             bool                                         /* don't verify client certs */
-	heartbeatinterval    time.Duration       = 2 * time.Minute        /* time between beats */
-	idletimeout          time.Duration       = 800 * time.Millisecond /* time to wait for client to say something*/
-	version                                  = "dev"                  /* set by making a release */
-	ARGV                 *cli.Context                                 /* command line */
+	pruneclientinterval  = 1 * time.Minute                          /* idle timeout for the local to relay connection */
+	certificate          string                                     /* file name containing a TLS ceritifcate */
+	certificateauthority string                                     /* file containing certificateauthority */
+	privatekey           string                                     /* file containing the private TLS key */
+	authscript           string                                     /* file to exec for an authentication script */
+	networkendpoint      string                                     /* the host:port or :port address */
+	noverify             bool                                       /* don't verify client certs */
+	heartbeatinterval    time.Duration     = 2 * time.Minute        /* time between beats */
+	idletimeout          time.Duration     = 800 * time.Millisecond /* time to wait for client to say something*/
+	version                                = "dev"                  /* set by making a release */
+	ARGV                 *cli.Context                               /* command line */
 )
 
 // either use the given values for cert key and ca or generate them anew
@@ -204,42 +201,6 @@ type Zclient struct {
 	connpool chan net.Conn /* for receiving conns */
 }
 
-// messages look like something like this (ll+aFFesdfbASDFASDsdf112323/sdfasd)
-func send(stream net.Conn, token []byte) (int, error) {
-	message := []byte("(")
-	message = append(message, token...)
-	message = append(message, []byte(")")...)
-	if len(message) > MAXMSGLENGTH {
-		orig := message
-		message = message[:MAXMSGLENGTH-1]
-		message = append(message, []byte(")")...)
-		log.Printf("WARNING truncated send [%d]%v...%v to [%d]%v...%v", len(orig), orig[:10], orig[len(orig)-10:len(orig)], len(message), message[:10], message[len(message)-10:len(message)])
-	}
-	n, err := stream.Write(message)
-	if err != nil {
-		log.Printf("writing token [%d]%s", n, string(message[:n]))
-	}
-	return n, err
-}
-
-// oh wouldn't the devsec people -- ok, they'll never be happy -- but I'm using parenthesis delimited base64 for network messages.
-func recv(stream net.Conn) ([]byte, error) {
-	connio := bufio.NewReader(io.LimitReader(stream, MAXMSGLENGTH))
-	dat, err := connio.ReadBytes(byte(')'))
-	if err != nil {
-		return nil, err
-	}
-	return dat[1 : len(dat)-1], err
-}
-
-// timing out recv
-func recvWithTimeout(conn net.Conn, timeout time.Duration) ([]byte, error) {
-	conn.SetReadDeadline(time.Now().Add(timeout))
-	message, err := recv(conn)
-	conn.SetDeadline(time.Time{})
-	return message, err
-}
-
 // for removing the conn from the list
 func (c *client) stopTrackingConn(ref string) error {
 	c.Lock()
@@ -365,7 +326,7 @@ func (*Relay) Authenticate(conn net.Conn) (*AuthInfo, error) {
 	}
 	if cs.VerifiedChains == nil {
 		if authscript != "" {
-			cookie, err := recvWithTimeout(conn, idletimeout)
+			cookie, err := xyz.RecvWithTimeout(conn, idletimeout)
 			if err != nil {
 				return nil, fmt.Errorf("Auth failed: %s", err)
 			}
@@ -440,7 +401,7 @@ func (server *Relay) makeControlConnection(conn net.Conn) error {
 		conn.Close()
 		return err
 	}
-	_, err = send(stream, token)
+	_, err = xyz.Send(stream, token)
 	if err != nil {
 		stream.Close()
 		session.Close()
@@ -492,7 +453,7 @@ func nRandomBytes64(N uint32) ([]byte, error) {
 
 // clients request tokens or send tokens. If using authscript they send a token request and an auth blob.
 func (server *Relay) HandleConn(conn *tls.Conn) {
-	message, err := recvWithTimeout(conn, idletimeout)
+	message, err := xyz.RecvWithTimeout(conn, idletimeout)
 	if err != nil {
 		log.Printf("Client \"%v\" did not send quickly enough: %s", conn.RemoteAddr(), err.Error())
 		conn.Close()
@@ -524,7 +485,7 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 		}
 		log.Printf("New %s: (%v...%v) len %d", conntype, string(message[:10]), string(message[len(message)-10:len(message)]), len(message))
 		if isX {
-			b, err := recvWithTimeout(conn, idletimeout)
+			b, err := xyz.RecvWithTimeout(conn, idletimeout)
 			name := string(b)
 			if err != nil {
 				log.Printf("Error receiving name from %s: %s", conn.RemoteAddr(), err)
@@ -557,7 +518,7 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 				return
 			}
 			server.Unlock()
-			_, err = send(zclient.ctl, []byte("CONNECT"))
+			_, err = xyz.Send(zclient.ctl, []byte("CONNECT"))
 			if err != nil {
 				log.Printf("Error sending connect message to Z: %s", err)
 				conn.Close()
@@ -570,7 +531,8 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 			xclient.Lock()
 			xclient.pool[connid] = conn
 			xclient.Unlock()
-			proxyConn(conn, zconn)
+			xyz.ProxyConn(conn, zconn)
+			log.Printf("Proxy started between Z (%p) and X (%p)", zconn, conn)
 			xclient.stopTrackingConn(connid)
 			zclient.stopTrackingConn(zconnid)
 		} else {
@@ -589,60 +551,6 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 			zclient.connpool <- conn
 		}
 	}
-
-}
-
-// A larger buffer size might be better
-func proxyConn(rConn net.Conn, conn net.Conn) {
-
-	timeout := relayidletimeout
-
-	log.Printf("Proxy started between Z (%p) and X (%p)", conn, rConn)
-
-	go func() {
-		defer rConn.Close()
-		defer conn.Close()
-		for {
-			buf := make([]byte, PROXYCHUNK)
-			conn.SetDeadline(time.Now().Add(timeout))
-			n, e := conn.Read(buf)
-			var e1 error
-			if n > 0 {
-				_, e1 = rConn.Write(buf[:n])
-			}
-			if e != nil {
-				log.Printf("Exiting on read %p: %s", rConn, e)
-				break
-			}
-			if e1 != nil {
-				log.Println("Exiting on write %p: %s", conn, e1)
-				log.Println(e1)
-				break
-			}
-		}
-	}()
-
-	go func() {
-		defer rConn.Close()
-		defer conn.Close()
-		for {
-			buf := make([]byte, PROXYCHUNK)
-			rConn.SetDeadline(time.Now().Add(timeout))
-			n, e := rConn.Read(buf)
-			var e1 error
-			if n > 0 {
-				_, e1 = conn.Write(buf[:n])
-			}
-			if e != nil {
-				log.Printf("Exiting on read %p: %s", rConn, e)
-				break
-			}
-			if e1 != nil {
-				log.Println("Exiting on write %p: %s", conn, e1)
-				break
-			}
-		}
-	}()
 
 }
 
