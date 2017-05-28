@@ -24,7 +24,7 @@ cp Y ../../bdist/Y_freebsd_amd64
 GOOS="linux" GOARCH="arm" GOARM="7"
 cp Y ../../bdist/Y_linux_arm
 GOOS="darwin" GOARCH="amd64" go build
-cp Y ../../bdist/X_darwin_amd64
+cp Y ../../bdist/Y_darwin_amd64
 
 cd ../Z
 go build
@@ -36,7 +36,7 @@ cp Z ../../bdist/Z_freebsd_amd64
 GOOS="linux" GOARCH="arm" GOARM="7"
 cp Z ../../bdist/Z_linux_arm
 GOOS="darwin" GOARCH="amd64" go build
-cp Z ../../bdist/X_darwin_amd64
+cp Z ../../bdist/Z_darwin_amd64
 
 
 
