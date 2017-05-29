@@ -2,7 +2,7 @@
 
 set -x
 
-cd cmd/X
+cd X
 go build
 cp X ../../bdist/X_linux_amd64
 GOOS="windows" GOARCH="amd64" go build
