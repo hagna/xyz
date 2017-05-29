@@ -296,12 +296,23 @@ func action(c *cli.Context) error {
 	}
 	z := new(Z)
 	z.RelayClients = make(map[string]*RelayClient)
-	for i := 0; i < len(c.Args()); i += 2 {
+	i := 0
+	for {
 		relayendpoint := c.Args().Get(i)
-		localendpoint := c.Args().Get(i + 1)
-		if localendpoint == "" {
-			log.Fatal("need local endpoint")
+		if relayendpoint == "" {
+			if i == 0 {
+				return fmt.Errorf("Need relay endpoint host:port")
+			} else {
+				break
+			}
+
 		}
+		i++
+		localendpoint := c.Args().Get(i)
+		if localendpoint == "" {
+			return fmt.Errorf("Need local endpoint host:port")
+		}
+		i++
 		controlConnector := startControlConnector(config.Clone(), relayendpoint)
 		go func() {
 			for {

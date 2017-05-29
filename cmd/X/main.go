@@ -318,19 +318,66 @@ func action(c *cli.Context) error {
 	}
 	x := new(X)
 	x.RelayClients = make(map[string]*RelayClient)
-	for i := 0; i < len(c.Args()); i += 2 {
+	if cmd := c.Args().Get(len(c.Args()) - 1); cmd == "who" {
+		for i := 0; i < len(c.Args())-1; i++ {
+			relayendpoint := c.Args().Get(i)
+			log.Printf("relayendpoint %s", relayendpoint)
+
+			controlConnector := startControlConnector(config.Clone(), relayendpoint)
+			rc := <-controlConnector
+
+			conn, err := tls.Dial("tcp", rc.ctl.RemoteAddr().String(), config)
+			if err != nil {
+				log.Printf("Error dialing relay: %s", err)
+				conn.Close()
+				continue
+			}
+			defer conn.Close()
+			_, err = xyz.Send(conn, []byte(rc.token))
+			if err != nil {
+				log.Printf("Could not send token for WHO command: %s", err)
+				continue
+			}
+			_, err = xyz.Send(conn, []byte("WHO"))
+			if err != nil {
+				log.Printf("Could not send WHO command: %s", err)
+				continue
+			}
+			res, err := xyz.Recv(conn)
+			if err != nil {
+				log.Printf("Could not receive WHO list: %s", err)
+				continue
+			}
+			fmt.Println(relayendpoint)
+			fmt.Println(string(res))
+		}
+		return nil
+	}
+	i := 0
+	for {
 		relayendpoint := c.Args().Get(i)
-		localendpoint := c.Args().Get(i + 1)
-		name := c.Args().Get(i + 2)
+		if relayendpoint == "" {
+			if i == 0 {
+				return fmt.Errorf("Need relay endpoint host:port")
+			} else {
+				break
+			}
+
+		}
+		i++
+		localendpoint := c.Args().Get(i)
+		if localendpoint == "" {
+			return fmt.Errorf("Need local endpoint host:port")
+		}
+		i++
+		name := c.Args().Get(i)
 		if len(name) >= 1 {
 			if name[0] == '@' {
 				name = name[1:]
+				i++
 			} else {
 				name = ""
 			}
-		}
-		if localendpoint == "" {
-			log.Fatal("need local endpoint")
 		}
 		controlConnector := startControlConnector(config.Clone(), relayendpoint)
 		ln, err := net.Listen("tcp", localendpoint)

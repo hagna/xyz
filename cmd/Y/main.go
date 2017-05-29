@@ -490,6 +490,19 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 			if err != nil {
 				log.Printf("Error receiving name from %s: %s", conn.RemoteAddr(), err)
 			}
+			if name == "WHO" {
+				tosend := []byte{}
+				for _, v := range server.whoList() {
+					tosend = append(tosend, []byte(v+"\n")...)
+				}
+
+				_, err := xyz.Send(conn, tosend)
+				if err != nil {
+					log.Printf("Could not send whoList(): %s", err)
+				}
+				conn.Close()
+				return
+			}
 			server.Lock()
 			if len(server.Zclients) == 0 {
 				server.Unlock()
@@ -517,6 +530,10 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 				conn.Close()
 				return
 			}
+			if zclient.authinfo.name != name {
+				log.Printf("Even though X wanted \"%s\" Y is connecting the only Z it has \"%s\"", name, zclient.authinfo.name)
+			}
+
 			server.Unlock()
 			_, err = xyz.Send(zclient.ctl, []byte("CONNECT"))
 			if err != nil {
