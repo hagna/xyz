@@ -27,15 +27,16 @@ const (
 )
 
 var (
-	heartbeatinterval    = 2 * time.Minute /* time between beats */
-	certificate          string            /* file name containing a TLS ceritifcate */
-	certificateauthority string            /* file containing certificateauthority */
-	privatekey           string            /* file containing the private TLS key */
-	authscript           string            /* file to exec for an authentication script */
-	networkendpoint      string            /* the host:port or :port address */
-	noverify             bool              /* don't verify client certs */
-	version              = "dev"           /* set by making a release */
-	ARGV                 *cli.Context      /* command line */
+	cert_common_name     string       = "X"             /* the common name to use in the certificate */
+	heartbeatinterval                 = 2 * time.Minute /* time between beats */
+	certificate          string                         /* file name containing a TLS ceritifcate */
+	certificateauthority string                         /* file containing certificateauthority */
+	privatekey           string                         /* file containing the private TLS key */
+	authscript           string                         /* file to exec for an authentication script */
+	networkendpoint      string                         /* the host:port or :port address */
+	noverify             bool                           /* don't verify client certs */
+	version              = "dev"                        /* set by making a release */
+	ARGV                 *cli.Context                   /* command line */
 )
 
 // either use the given values for cert key and ca or generate them anew
@@ -70,7 +71,7 @@ func getTLScerts(c, k, ca string) ([]byte, []byte, []byte, error) {
 		}
 		log.Println("creating certificate")
 		isCA = false
-		cert, priv, err := xyz.CaSignedCert(host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, isX, &ca_key_pair)
+		cert, priv, err := xyz.CaSignedCert(cert_common_name, host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, isX, &ca_key_pair)
 		if err != nil {
 			log.Fatalf("failed to make signed cert %s", err)
 		}
@@ -157,6 +158,7 @@ func main() {
 		cli.BoolFlag{Destination: &noverify, Name: "noverify", Usage: "Verify client side certificates"},
 		cli.StringFlag{Destination: &authscript, Name: "auth, as", Usage: "Authorization script", Value: authscript},
 		cli.StringFlag{Destination: &privatekey, Name: "key", Usage: "private key", Value: privatekey},
+		cli.StringFlag{Destination: &cert_common_name, Name: "name", Usage: "Name of auto generated certificate (not applicable if you use key, cert, cacert)", Value: cert_common_name},
 		cli.StringFlag{Destination: &certificateauthority, Name: "cacert", Usage: "ca cert", Value: certificateauthority},
 		cli.StringFlag{Destination: &certificate, Name: "cert", Usage: "cert file", Value: certificate},
 	}
@@ -213,7 +215,8 @@ func handleLocalClient(conn net.Conn, rc *RelayClient, config *tls.Config, name 
 
 }
 
-func connectRelayClient(config *tls.Config, endpoint string) (*RelayClient, error) {
+// For sending the token request from X to Y
+func makeControlConnection(config *tls.Config, endpoint string) (*RelayClient, error) {
 	mathrand.Seed(time.Now().Unix())
 	conn, err := tls.Dial("tcp", endpoint, config.Clone())
 	if err != nil {
@@ -279,7 +282,7 @@ func startControlConnector(config *tls.Config, endpoint string) <-chan *RelayCli
 			//shortconnect = 10 * time.Second
 		)
 	CONNECT:
-		relayclient, err := connectRelayClient(config, endpoint)
+		relayclient, err := makeControlConnection(config, endpoint)
 		for {
 			if err != nil || relayclient.session.IsClosed() {
 				delay = math.Min(delay*factor, maxDelay)

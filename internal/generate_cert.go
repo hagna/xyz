@@ -191,6 +191,7 @@ func mkKey(ecdsaCurve string, rsaBits int) (interface{}, error) {
 }
 
 type PkiArgs struct {
+	cname      string
 	host       string
 	rsaBits    int
 	ecdsaCurve string
@@ -207,6 +208,7 @@ func mkSignedCert(a *PkiArgs) (pem.Block, pem.Block, error) {
 	ca := a.ca
 	isX := a.isX
 	isCA := a.isCA
+	cname := a.cname
 	validFor := a.validFor
 	validFrom := a.validFrom
 	ecdsaCurve := a.ecdsaCurve
@@ -231,6 +233,7 @@ func mkSignedCert(a *PkiArgs) (pem.Block, pem.Block, error) {
 	csrTemplate := x509.CertificateRequest{
 		Subject: pkix.Name{
 			Organization: []string{"xyz"},
+			CommonName:   cname,
 		},
 		PublicKey:          publicKey(priv),
 		PublicKeyAlgorithm: x509.RSA,
@@ -324,7 +327,7 @@ func mkSignedCert(a *PkiArgs) (pem.Block, pem.Block, error) {
 }
 
 // Create signed cert from ca
-func CaSignedCert(host string, rsaBits int, ecdsaCurve string, validFrom string, validFor time.Duration, isCA bool, isX bool, ca *tls.Certificate) (pem.Block, pem.Block, error) {
+func CaSignedCert(cname string, host string, rsaBits int, ecdsaCurve string, validFrom string, validFor time.Duration, isCA bool, isX bool, ca *tls.Certificate) (pem.Block, pem.Block, error) {
 	if ca == nil {
 		parentcert, e := ioutil.ReadFile("0.cert")
 		if e != nil {
@@ -338,7 +341,7 @@ func CaSignedCert(host string, rsaBits int, ecdsaCurve string, validFrom string,
 		}
 	}
 
-	cert, priv, err := mkSignedCert(&PkiArgs{host: host, rsaBits: rsaBits, ecdsaCurve: ecdsaCurve, validFrom: validFrom, validFor: validFor, isCA: isCA, ca: ca, isX: isX})
+	cert, priv, err := mkSignedCert(&PkiArgs{cname: cname, host: host, rsaBits: rsaBits, ecdsaCurve: ecdsaCurve, validFrom: validFrom, validFor: validFor, isCA: isCA, ca: ca, isX: isX})
 	if err != nil {
 		log.Fatalf("failed to make signed cert %s", err)
 	}
@@ -357,8 +360,9 @@ func GenerateSignedCertificate(c *cli.Context) error {
 	validFor := c.Duration("duration")
 	isCA := c.Bool("ca")
 	isX := c.Bool("x")
+	cname := c.String("cname")
 
-	cert, priv, err := CaSignedCert(host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, isX, nil)
+	cert, priv, err := CaSignedCert(cname, host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, isX, nil)
 	keyno := getMaxName()
 	var certname = keyno + ".cert"
 	var keyname = keyno + ".key"

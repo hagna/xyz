@@ -41,7 +41,7 @@ func ProxyConn(rConn net.Conn, conn net.Conn) {
 				break
 			}
 			if e1 != nil {
-				log.Println("Exiting on write %p: %s", conn, e1)
+				log.Printf("Exiting on write %p: %s", conn, e1)
 				log.Println(e1)
 				break
 			}
@@ -64,7 +64,7 @@ func ProxyConn(rConn net.Conn, conn net.Conn) {
 				break
 			}
 			if e1 != nil {
-				log.Println("Exiting on write %p: %s", conn, e1)
+				log.Printf("Exiting on write %p: %s", conn, e1)
 				break
 			}
 		}

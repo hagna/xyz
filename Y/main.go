@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"container/list"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -30,17 +31,18 @@ const (
 )
 
 var (
-	pruneclientinterval  = 1 * time.Minute                          /* idle timeout for the local to relay connection */
-	certificate          string                                     /* file name containing a TLS ceritifcate */
-	certificateauthority string                                     /* file containing certificateauthority */
-	privatekey           string                                     /* file containing the private TLS key */
-	authscript           string                                     /* file to exec for an authentication script */
-	networkendpoint      string                                     /* the host:port or :port address */
-	noverify             bool                                       /* don't verify client certs */
-	heartbeatinterval    time.Duration     = 2 * time.Minute        /* time between beats */
-	idletimeout          time.Duration     = 800 * time.Millisecond /* time to wait for client to say something*/
-	version                                = "dev"                  /* set by making a release */
-	ARGV                 *cli.Context                               /* command line */
+	cert_common_name     string        = "Y"                    /* the common name to use in the certificate */
+	pruneclientinterval  time.Duration = 1 * time.Minute        /* idle timeout for the local to relay connection */
+	certificate          string                                 /* file name containing a TLS ceritifcate */
+	certificateauthority string                                 /* file containing certificateauthority */
+	privatekey           string                                 /* file containing the private TLS key */
+	authscript           string                                 /* file to exec for an authentication script */
+	networkendpoint      string                                 /* the host:port or :port address */
+	noverify             bool                                   /* don't verify client certs */
+	heartbeatinterval    time.Duration = 2 * time.Minute        /* time between beats */
+	idletimeout          time.Duration = 800 * time.Millisecond /* time to wait for client to say something*/
+	version                            = "dev"                  /* set by making a release */
+	ARGV                 *cli.Context                           /* command line */
 )
 
 // either use the given values for cert key and ca or generate them anew
@@ -75,7 +77,7 @@ func getTLScerts(c, k, ca string) ([]byte, []byte, []byte, error) {
 		}
 		log.Println("creating certificate")
 		isCA = false
-		cert, priv, err := xyz.CaSignedCert(host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, isX, &ca_key_pair)
+		cert, priv, err := xyz.CaSignedCert(cert_common_name, host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, isX, &ca_key_pair)
 		if err != nil {
 			log.Fatalf("failed to make signed cert %s", err)
 		}
@@ -184,9 +186,9 @@ type Relay struct {
 
 // Each client gets one
 type client struct {
-	ctl      net.Conn            /* the control connection */
-	pool     map[string]net.Conn /* all the connections */
-	session  *yamux.Session      /* use this to create new streams */
+	ctl      net.Conn       /* the control connection */
+	pool     *list.List     /* all the connections TODO make it a list of *net.Conn */
+	session  *yamux.Session /* use this to create new streams */
 	authinfo *AuthInfo
 	sync.Mutex
 }
@@ -202,13 +204,19 @@ type Zclient struct {
 }
 
 // for removing the conn from the list
-func (c *client) stopTrackingConn(ref string) error {
+func (c *client) stopTrackingConn(conn net.Conn) error {
 	c.Lock()
-	_, ok := c.pool[ref]
-	if !ok {
-		log.Printf("BUGBUG no conn by the name %s", ref)
-	} else {
-		log.Printf("Stop tracking connection %s", ref)
+	var next *list.Element
+	for e := c.pool.Front(); e != nil; e = next {
+		next = e.Next()
+		b, ok := e.Value.(net.Conn)
+		if !ok {
+			log.Printf("BUGBUG list did not contain net.Conn")
+		}
+		if b == conn {
+			log.Printf("Stop tracking %s to %s", b.LocalAddr().String(), b.RemoteAddr().String())
+			c.pool.Remove(e)
+		}
 	}
 	c.Unlock()
 	return nil
@@ -216,26 +224,19 @@ func (c *client) stopTrackingConn(ref string) error {
 
 // for destroying all the connections corresponding to one client
 func (c *client) Close() error {
-	var deleteme []string
-	for _, v := range c.pool {
-		v.Close()
-		name := fmt.Sprintf("%p", v)
-		_, ok := c.pool[name]
+	var next *list.Element
+	for e := c.pool.Front(); e != nil; e = next {
+		next = e.Next()
+		b, ok := e.Value.(net.Conn)
 		if !ok {
-			log.Printf("BUGBUG no conn by the name %s", name)
+			log.Printf("BUGBUG list did not contain net.Conn")
 		}
-		deleteme = append(deleteme, name)
+		b.Close()
+		c.pool.Remove(e)
 
 	}
-	for _, v := range deleteme {
-		conn, ok := c.pool[v]
-		if !ok {
-			log.Printf("BUGBUG no conn by the name %s", v)
-		} else {
-			log.Printf("Closing conn %p", conn)
-			conn.Close()
-		}
-		delete(c.pool, v)
+	if !c.session.IsClosed() {
+		c.session.Close()
 	}
 	return nil
 }
@@ -369,7 +370,7 @@ func (*Relay) Authenticate(conn net.Conn) (*AuthInfo, error) {
 	return authinfo, nil
 }
 
-// make the control connection
+// Make the control (yamux) connection to X or Z and send the token response
 func (server *Relay) makeControlConnection(conn net.Conn) error {
 	authinfo, err := server.Authenticate(conn)
 	if err != nil {
@@ -415,7 +416,7 @@ func (server *Relay) makeControlConnection(conn net.Conn) error {
 		client.ctl = stream
 		client.authinfo = authinfo
 		client.session = session
-		client.pool = make(map[string]net.Conn)
+		client.pool = list.New()
 		server.Lock()
 		server.Xclients[string(token)] = client
 		server.Unlock()
@@ -425,7 +426,7 @@ func (server *Relay) makeControlConnection(conn net.Conn) error {
 		client.ctl = stream
 		client.authinfo = authinfo
 		client.session = session
-		client.pool = make(map[string]net.Conn)
+		client.pool = list.New()
 		server.Lock()
 		server.Zclients[string(token)] = client
 		server.Unlock()
@@ -541,17 +542,15 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 				conn.Close()
 				return
 			}
-			connid := fmt.Sprintf("%p", conn)
 			zconn := <-zclient.connpool
-			zconnid := fmt.Sprintf("%p", zconn)
 			log.Printf("Adding %p to Xpool", conn)
 			xclient.Lock()
-			xclient.pool[connid] = conn
+			xclient.pool.PushBack(conn)
 			xclient.Unlock()
 			xyz.ProxyConn(conn, zconn)
 			log.Printf("Proxy started between Z (%p) and X (%p)", zconn, conn)
-			xclient.stopTrackingConn(connid)
-			zclient.stopTrackingConn(zconnid)
+			xclient.stopTrackingConn(conn)
+			zclient.stopTrackingConn(zconn)
 		} else {
 			server.Lock()
 			zclient, isZ := server.Zclients[string(token)]
@@ -563,7 +562,7 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 			}
 			log.Printf("Adding %p to Zpool", conn)
 			zclient.Lock()
-			zclient.pool[fmt.Sprintf("%p", conn)] = conn
+			zclient.pool.PushBack(conn)
 			zclient.Unlock()
 			zclient.connpool <- conn
 		}
