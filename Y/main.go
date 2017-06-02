@@ -109,11 +109,11 @@ func tlsConfig() (*tls.Config, error) {
 		CipherSuites: []uint16{tls.TLS_ECDHE_RSA_WITH_RC4_128_SHA},
 		ClientAuth:   tls.RequireAnyClientCert,
 	}
-	config.BuildNameToCertificate()
-
-	if noverify {
-		config.InsecureSkipVerify = true
+	config.InsecureSkipVerify = noverify
+	if !noverify {
+		config.ClientAuth = tls.RequireAndVerifyClientCert
 	}
+	config.BuildNameToCertificate()
 	/*if *servername != "" {
 		config.ServerName = *servername
 	}
@@ -152,6 +152,7 @@ func main() {
 				cli.StringFlag{Name: "start-date", Value: "", Usage: "Creation date formatted as Jan 1 15:04:05 2011"},
 
 				cli.StringFlag{Name: "ecdsa-curve", Value: "", Usage: "ECDSA curve to use to generate a key. Valid values are P224, P256, P384, P521"},
+				cli.StringFlag{Destination: &cert_common_name, Name: "name", Usage: "Name of auto generated certificate (not applicable if you use key, cert, cacert)", Value: cert_common_name},
 				cli.DurationFlag{Name: "duration", Value: 365 * 24 * time.Hour, Usage: "Duration that certificate is valid for"},
 				cli.BoolFlag{Name: "ca", Usage: "whether this cert should be its own Certificate Authority"},
 				cli.BoolFlag{Name: "x", Usage: "Set OU to X for certs from X"},
@@ -214,7 +215,7 @@ func (c *client) stopTrackingConn(conn net.Conn) error {
 			log.Printf("BUGBUG list did not contain net.Conn")
 		}
 		if b == conn {
-			log.Printf("Stop tracking %s to %s", b.LocalAddr().String(), b.RemoteAddr().String())
+			//log.Printf("Stop tracking %s to %s", b.LocalAddr().String(), b.RemoteAddr().String())
 			c.pool.Remove(e)
 		}
 	}
@@ -261,7 +262,7 @@ func (Y *Relay) pruneClients() error {
 		for k, v := range Y.Xclients {
 			v.Lock()
 			if v.session.IsClosed() {
-				log.Printf("%s has closed so closing connections", v.authinfo.name)
+				//log.Printf("%s has closed so closing connections", v.authinfo.name)
 				v.Close()
 				deleteme = append(deleteme, k)
 			}
@@ -275,7 +276,7 @@ func (Y *Relay) pruneClients() error {
 		for k, v := range Y.Zclients {
 			v.Lock()
 			if v.session.IsClosed() {
-				log.Printf("%s has closed so closing connections", v.authinfo.name)
+				//log.Printf("%s has closed so closing connections", v.authinfo.name)
 				v.Close()
 				deleteme = append(deleteme, k)
 			}
@@ -307,56 +308,69 @@ func (*Relay) Authenticate(conn net.Conn) (*AuthInfo, error) {
 		return nil, fmt.Errorf("Auth failed could not cast to TLS connection")
 	}
 	cs := tconn.ConnectionState()
-	log.Printf("\tPeerCertificates:")
-	for i, v := range cs.PeerCertificates {
+	//log.Printf("\tPeerCertificates:")
+	for _, v := range cs.PeerCertificates {
 		authinfo.name = v.Subject.CommonName
 		z := v.Subject.OrganizationalUnit
 		ou := ""
 		if len(z) >= 1 {
 			ou = z[0]
 		}
-		log.Printf("\t\t%d: %+v\n", i, v.Subject)
+		//log.Printf("\t\t%d: %+v\n", i, v.Subject)
 		if ou == "X" {
 			authinfo.isX = true
 			break
 		}
 	}
-	log.Printf("\tVerified chains:")
-	for i, v := range cs.VerifiedChains {
-		log.Printf("\t\t%d: %+v\n", i, v)
+	//log.Printf("\tVerified chains:")
+	/*for i, v := range cs.VerifiedChains {
+		//log.Printf("\t\t%d: %+v\n", i, v)
 	}
+	*/
+	verifycert := !noverify
 	if cs.VerifiedChains == nil {
 		if authscript != "" {
+			//log.Println("trying to receive auth")
 			cookie, err := xyz.RecvWithTimeout(conn, idletimeout)
 			if err != nil {
-				return nil, fmt.Errorf("Auth failed: %s", err)
-			}
-			cmd := exec.Command(authscript)
-			stdin, err := cmd.StdinPipe()
-			if err != nil {
-				return nil, fmt.Errorf("Auth failed: %s", err)
-			}
-			fmt.Fprintf(stdin, string(cookie))
-			out, err := cmd.Output()
-			if err != nil {
-				return nil, fmt.Errorf("Auth failed: %s", err)
-			}
-			name := string(out)
-			conntype := "Z"
-			if strings.Index(name, ":") != -1 {
-				z := strings.Split(name, ":")
-				if len(z) != 2 {
-					return nil, fmt.Errorf("Auth failed: expected type:name in %v", name)
+				err2 := fmt.Errorf("Error receiving auth cookie: %s", err)
+				if verifycert {
+					return nil, err2
+				} else {
+					log.Printf("Letting connection continue despite: %s", err2)
 				}
-				conntype, name = z[0], z[1]
-				if conntype == "X" {
-					authinfo.isX = true
+			} else {
+				cmd := exec.Command(authscript)
+				cmd.Env = os.Environ()
+				cmd.Env = append(cmd.Env, "RemoteAddr="+conn.RemoteAddr().String())
+				cmd.Env = append(cmd.Env, "LocalAddr="+conn.LocalAddr().String())
+				stdin, err := cmd.StdinPipe()
+				if err != nil {
+					return nil, fmt.Errorf("Error writing to stdin of \"%s\": %s", authscript, err)
 				}
+				fmt.Fprintf(stdin, string(cookie))
+				out, err := cmd.Output()
+				if err != nil {
+					return nil, fmt.Errorf("Error on exit \"%s\": %s", authscript, err)
+				}
+				name := string(out)
+				name = strings.TrimSpace(name)
+				conntype := "Z"
+				if strings.Index(name, ":") != -1 {
+					z := strings.Split(name, ":")
+					if len(z) != 2 {
+						return nil, fmt.Errorf("Auth failed: expected type:name in %v", name)
+					}
+					conntype, name = z[0], z[1]
+					if conntype == "X" {
+						authinfo.isX = true
+					}
+				}
+				authinfo.name = name
 			}
-			authinfo.name = name
 		} else {
-			if !noverify {
-				return nil, fmt.Errorf("Could not authenticate with certificate")
+			if verifycert {
+				return nil, fmt.Errorf("BUGBUG Could not authenticate with certificate. The TLS connection should have failed long before reaching this line.")
 			}
 		}
 	}
@@ -373,6 +387,16 @@ func (*Relay) Authenticate(conn net.Conn) (*AuthInfo, error) {
 // Make the control (yamux) connection to X or Z and send the token response
 func (server *Relay) makeControlConnection(conn net.Conn) error {
 	authinfo, err := server.Authenticate(conn)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	token, err := nRandomBytes64(TOKENLENGTH)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	_, err = xyz.Send(conn, token)
 	if err != nil {
 		conn.Close()
 		return err
@@ -394,21 +418,8 @@ func (server *Relay) makeControlConnection(conn net.Conn) error {
 		conn.Close()
 		return err
 	}
-	log.Println("accepted yamux stream")
-	token, err := nRandomBytes64(TOKENLENGTH)
-	if err != nil {
-		stream.Close()
-		session.Close()
-		conn.Close()
-		return err
-	}
-	_, err = xyz.Send(stream, token)
-	if err != nil {
-		stream.Close()
-		session.Close()
-		conn.Close()
-		return err
-	}
+	//log.Println("accepted yamux stream")
+
 	ttype := "Z"
 	if authinfo.isX {
 		ttype = "X"
@@ -432,8 +443,7 @@ func (server *Relay) makeControlConnection(conn net.Conn) error {
 		server.Unlock()
 	}
 
-	log.Printf("%s: token request %s", ttype, conn.RemoteAddr())
-
+	log.Printf("%s %s %s", ttype, conn.RemoteAddr(), conn.LocalAddr())
 	return nil
 }
 
@@ -456,7 +466,7 @@ func nRandomBytes64(N uint32) ([]byte, error) {
 func (server *Relay) HandleConn(conn *tls.Conn) {
 	message, err := xyz.RecvWithTimeout(conn, idletimeout)
 	if err != nil {
-		log.Printf("Client \"%v\" did not send quickly enough: %s", conn.RemoteAddr(), err.Error())
+		log.Printf("Client \"%v\" did not send quickly enough: %s", conn.RemoteAddr(), err)
 		conn.Close()
 		return
 	}
@@ -468,10 +478,6 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 		}
 	default:
 		token := message
-		if err != nil {
-			log.Printf("Could not read token: %v", err)
-			return
-		}
 		if len(token) < TOKENLENGTH {
 			log.Printf("Token too short: %v", token)
 			conn.Close()
@@ -480,11 +486,10 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 		server.Lock()
 		xclient, isX := server.Xclients[string(token)]
 		server.Unlock()
-		conntype := "X"
+		/*conntype := "X"
 		if !isX {
 			conntype = "Z"
-		}
-		log.Printf("New %s: (%v...%v) len %d", conntype, string(message[:10]), string(message[len(message)-10:len(message)]), len(message))
+		}*/
 		if isX {
 			b, err := xyz.RecvWithTimeout(conn, idletimeout)
 			name := string(b)
@@ -508,7 +513,7 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 			if len(server.Zclients) == 0 {
 				server.Unlock()
 				m := "No Z to connect to\n"
-				log.Printf("sending %s", m)
+				//log.Printf("sending %s", m)
 				_, _ = conn.Write([]byte(m))
 				conn.Close()
 				return
@@ -518,7 +523,7 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 			zclient := new(Zclient)
 			server.Lock()
 			for _, v := range server.Zclients {
-				log.Printf("Does zclient \"%s\" match \"%s\"", v.authinfo.name, name)
+				//log.Printf("Does zclient \"%s\" match \"%s\"", v.authinfo.name, name)
 				zclient = v
 				if v.authinfo.name == name {
 					zclient = v
@@ -532,7 +537,7 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 				return
 			}
 			if zclient.authinfo.name != name {
-				log.Printf("Even though X wanted \"%s\" Y is connecting the only Z it has \"%s\"", name, zclient.authinfo.name)
+				log.Printf("Y is connecting \"%s\" instead of \"%s\" because only \"%s\" exists", zclient.authinfo.name, name, zclient.authinfo.name)
 			}
 
 			server.Unlock()
@@ -543,12 +548,14 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 				return
 			}
 			zconn := <-zclient.connpool
-			log.Printf("Adding %p to Xpool", conn)
+			//log.Printf("Adding %p to Xpool", conn)
 			xclient.Lock()
 			xclient.pool.PushBack(conn)
 			xclient.Unlock()
+
+			log.Printf("Begin proxy X (%s) Y (%s) Z (%s)", conn.RemoteAddr(), conn.LocalAddr(), zconn.RemoteAddr())
 			xyz.ProxyConn(conn, zconn)
-			log.Printf("Proxy started between Z (%p) and X (%p)", zconn, conn)
+			//log.Printf("Proxy started between Z (%p) and X (%p)", zconn, conn)
 			xclient.stopTrackingConn(conn)
 			zclient.stopTrackingConn(zconn)
 		} else {
@@ -556,16 +563,18 @@ func (server *Relay) HandleConn(conn *tls.Conn) {
 			zclient, isZ := server.Zclients[string(token)]
 			server.Unlock()
 			if !isZ {
-				log.Printf("Error received token from unknown client")
+				log.Printf("Error token from unknown client %s %s", conn.LocalAddr(), conn.RemoteAddr())
 				conn.Close()
 				return
 			}
-			log.Printf("Adding %p to Zpool", conn)
+			//log.Printf("Adding %p to Zpool", conn)
 			zclient.Lock()
 			zclient.pool.PushBack(conn)
 			zclient.Unlock()
+			log.Printf("Z proxy %s %s", conn.RemoteAddr(), conn.LocalAddr())
 			zclient.connpool <- conn
 		}
+
 	}
 
 }
@@ -589,7 +598,7 @@ func action(c *cli.Context) error {
 			log.Fatal(err)
 		}
 		relay.listener = ln
-		log.Printf("listening on %s\n", ln.Addr().String())
+		//log.Printf("listening on %s\n", ln.Addr().String())
 		go func(ln net.Listener) {
 			for {
 				conn, err := ln.Accept()

@@ -1,4 +1,8 @@
-﻿XYZ Relay makes it easy to connect two computers both behind NAT using a relay server.  As easy as X -> Y -> Z. 
+﻿Sometimes a server becomes buried in networks, making it nearly inaccesible to clients.  An observer of this predicament might think, "Is there no *convenient* way for this client to talk to this server?"  There is a way, even a convenient way, for a buried server to talk to a client--but it takes another server.  At least that's the approach taken by the programs here.  A better solution probably invovles time travel to the past to replace IPv4 with IPv6.
+
+XYZ is the name of this project which is composed of three programs named X, Y, and Z.  
+
+XYZ makes it easy to connect two ports on two computers using a relay server.  As easy as X -> Y -> Z. 
 
                   
     client     NAT    relay    NAT     server
@@ -6,7 +10,7 @@
       X --------|------ Y ------|-------- Z
                 |               |
 
-Figure 1.1 These three programs move or copy a TCP port from one private network to another using a relay program running on a computer that is visible to both computers.
+Figure 1.1 These three programs move or copy a TCP port, an entire TCP port, from one private network to another using a relay program running on a computer that is visible to both computers.
 
 
 
@@ -70,7 +74,7 @@ The relay (Y) can authenticate X and Z clients in the following ways.  Both meth
 To have Y authenticate X/Z using client-side certificates, start Y with:
 
 
-    ./Y -cert mycert -key mykey -ca myca -verify :5000
+    ./Y -cert mycert -key mykey -ca myca :5000
 
 
 Then connect X or Z in a similar manner:
@@ -108,6 +112,9 @@ Immediately, `generatepassword.sh` is executed and the stdout is sent to Y to be
 If `checkpassword.sh` exits with 0 authentication proceeds, otherwise authentication fails.  The stdout of `checkpassword.sh` is used to name the connected client (see Z names below).
 
 
+Also, the environment variables RemoteAddr and LocalAddr are set to the remote address and local address of the connection in question.
+
+
 ## Authentication combinations
 
 Y authenticating X/Z can be combined in many ways.  Here's a sampling:
@@ -115,30 +122,30 @@ Y authenticating X/Z can be combined in many ways.  Here's a sampling:
 
 1. Y will authenticate X/Z using `auth.sh`.
 
-        ./Y -auth auth.sh :5000
+        ./Y -noverify -auth auth.sh :5000
         ./Z -noverify -auth sendauth.sh 9.8.7.6:5000 :443
         ./X -noverify -auth sendauth.sh 9.8.7.6:5000 :8443
 
 
 2. Y will authenticate X/Z using client-side certificates.
 
-        ./Y -verify ca.crt :5000
+        ./Y ca.crt :5000
         ./Z -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :443
         ./X -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :8443
 
 
-3. Y will authenticate X/Z using EITHER `auth.sh` or client certificates.
+3. Y will authenticate X/Z using client certificates first and fall back to `auth.sh` if the certificates do not verify first.
 
-        ./Y -auth auth.sh -verify ca.crt :5000
+        ./Y -auth auth.sh ca.crt :5000
         ./Z -noverify -auth sendauth.sh 9.8.7.6:5000 :443
         ./X -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :8443
 
 
-X/Z can also authenticate Y.  You may have noticed that `-noverify` has been used a lot in these modest examples.  The better option is to run Y with verifiable TLS enabled (as shown in the following command).  Then X/Z clients will verify the server by default (and must be run with -ca):
+X/Z can also authenticate Y.  You may have noticed that `-noverify` has been used a lot in these modest examples.  Y can also run with verifiable TLS enabled (as shown in the following command).  Then X/Z clients will verify the server by default (and must be run with -ca):
 
     ./Y -cert relay.crt -key relay.key -ca ca.crt :5000
-    ./Z -ca ca.crt 9.8.7.6:5000 :443
-    ./X -ca ca.crt 9.8.7.6:5000 :8443
+    ./Z -ca ca.crt -cert mycert -key mykey 9.8.7.6:5000 :443
+    ./X -ca ca.crt -cert mycert -key mykey 9.8.7.6:5000 :8443
 
 
 
@@ -148,8 +155,9 @@ Z clients are named depending on the authentication method used.  In all cases, 
 
 For client-side certificate authentication, the Z name will be the common name on the certificate.
 
-For `-auth` authentication, the Z name will be up to the first 30 bytes of stdout from Y running its `-auth` script.
+## X names
 
+Unlike Z, for `-auth` authentication, the X name will be up to the first 30 bytes of stdout from Y running its `-auth` script, but the prefix "X:" must preceed the name.
 
 
 # Multiple Servers per Relay

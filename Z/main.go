@@ -15,6 +15,7 @@ import (
 	mathrand "math/rand"
 	"net"
 	"os"
+	"os/exec"
 	"sync"
 
 	"time"
@@ -27,16 +28,17 @@ const (
 )
 
 var (
-	cert_common_name     string       = "Z"             /* the common name to use in the certificate */
-	heartbeatinterval                 = 2 * time.Minute /* time between beats */
-	certificate          string                         /* file name containing a TLS ceritifcate */
-	certificateauthority string                         /* file containing certificateauthority */
-	privatekey           string                         /* file containing the private TLS key */
-	authscript           string                         /* file to exec for an authentication script */
-	networkendpoint      string                         /* the host:port or :port address */
-	noverify             bool                           /* don't verify client certs */
-	version              = "dev"                        /* set by making a release */
-	ARGV                 *cli.Context                   /* command line */
+	cert_common_name     string        = "Z"                    /* the common name to use in the certificate */
+	heartbeatinterval                  = 2 * time.Minute        /* time between beats */
+	certificate          string                                 /* file name containing a TLS ceritifcate */
+	certificateauthority string                                 /* file containing certificateauthority */
+	privatekey           string                                 /* file containing the private TLS key */
+	authscript           string                                 /* file to exec for an authentication script */
+	networkendpoint      string                                 /* the host:port or :port address */
+	noverify             bool                                   /* don't verify client certs */
+	version              = "dev"                                /* set by making a release */
+	ARGV                 *cli.Context                           /* command line */
+	idletimeout          time.Duration = 800 * time.Millisecond /* time to wait for client to say something*/
 )
 
 // either use the given values for cert key and ca or generate them anew
@@ -105,9 +107,8 @@ func tlsConfig() (*tls.Config, error) {
 	}
 	config.BuildNameToCertificate()
 
-	if noverify {
-		config.InsecureSkipVerify = true
-	}
+	config.InsecureSkipVerify = noverify
+	log.Println("setting config.InsecureSkipVerify = %s", noverify)
 	/*if *servername != "" {
 		config.ServerName = *servername
 	}
@@ -173,7 +174,7 @@ type LocalServer struct {
 // X is a server and a client; this is the server side. Change here if you want to use sockets instead of tcp
 func handleLocalClient(conn net.Conn, rc *RelayClient, config *tls.Config) {
 	endpoint := rc.session.RemoteAddr().String()
-	log.Printf("Dialing relay for proxy requests %s\n", endpoint)
+	//log.Printf("Dialing relay for proxy requests %s\n", endpoint)
 
 	relayconn, err := tls.Dial("tcp", endpoint, config)
 	if err != nil {
@@ -197,13 +198,32 @@ func makeControlConnection(config *tls.Config, endpoint string) (*RelayClient, e
 	mathrand.Seed(time.Now().Unix())
 	conn, err := tls.Dial("tcp", endpoint, config.Clone())
 	if err != nil {
-		log.Println(err)
 		return nil, err
 	}
 	_, err = xyz.Send(conn, []byte("TOK?"))
 	if err != nil {
 		log.Printf("Error writing token request: %s", err)
 		conn.Close()
+		return nil, err
+	}
+	if authscript != "" {
+		cmd := exec.Command(authscript)
+		out, err := cmd.Output()
+		if err != nil {
+			log.Printf("Could not run authscript \"%s\": %s", authscript, err)
+		} else {
+			_, err = xyz.Send(conn, out)
+			if err != nil {
+				log.Printf("Could not send output of authscript to conn: %s", err)
+			}
+		}
+	}
+
+	relayclient := new(RelayClient)
+	relayclient.token, err = xyz.RecvWithTimeout(conn, idletimeout)
+	if err != nil {
+		conn.Close()
+		log.Printf("Error reading token: %s", err)
 		return nil, err
 	}
 
@@ -224,18 +244,10 @@ func makeControlConnection(config *tls.Config, endpoint string) (*RelayClient, e
 		return nil, err
 	}
 
-	relayclient := new(RelayClient)
 	relayclient.ctl = stream
 	relayclient.session = session
-	relayclient.token, err = xyz.Recv(stream)
-	if err != nil {
-		stream.Close()
-		session.Close()
-		conn.Close()
-		log.Printf("Error reading token: %s", err)
-		return nil, err
-	}
-	log.Printf("Control connecion established with token [%d]%v...", len(relayclient.token), string(relayclient.token[:10]))
+
+	log.Printf("Connecion established %s %s", relayclient.ctl.LocalAddr(), relayclient.ctl.RemoteAddr())
 	/*
 		x.Lock()
 		x.RelayClients[string(relayclient.token)] = relayclient
@@ -264,8 +276,8 @@ func startControlConnector(config *tls.Config, endpoint string) <-chan *RelayCli
 			if err != nil || relayclient.session.IsClosed() {
 				delay = math.Min(delay*factor, maxDelay)
 				delay = mathrand.NormFloat64()*delay*jitter + delay
-				backofftime := time.Duration(int64(delay * float64(time.Second)))
-				log.Printf("Relay control closed trying again in %v", backofftime)
+				backofftime := (time.Duration(int64(delay*float64(time.Second))) / time.Second) * time.Second
+				log.Printf("Error %s. Trying again in %v", err, backofftime)
 				time.Sleep(backofftime)
 				goto CONNECT
 				/* easier to follow than
@@ -276,8 +288,8 @@ func startControlConnector(config *tls.Config, endpoint string) <-chan *RelayCli
 				}
 				*/
 			}
-			rcChan <- relayclient
 			delay = initialDelay
+			rcChan <- relayclient
 			time.Sleep(200 * time.Millisecond)
 
 		}
@@ -287,17 +299,19 @@ func startControlConnector(config *tls.Config, endpoint string) <-chan *RelayCli
 	return rcChan
 }
 
+type endpoint struct {
+	localendpoint string
+	relayendpoint string
+}
+
 // really main()
 func action(c *cli.Context) error {
 	log.SetFlags(log.Lshortfile)
 	ARGV = c
-	config, err := tlsConfig()
-	if err != nil {
-		fmt.Println("TLS config failed.")
-		return (err)
-	}
+
 	z := new(Z)
 	z.RelayClients = make(map[string]*RelayClient)
+	endpoints := []endpoint{}
 	i := 0
 	for {
 		relayendpoint := c.Args().Get(i)
@@ -315,6 +329,17 @@ func action(c *cli.Context) error {
 			return fmt.Errorf("Need local endpoint host:port")
 		}
 		i++
+		endpoints = append(endpoints, endpoint{localendpoint, relayendpoint})
+
+	}
+	config, err := tlsConfig()
+	if err != nil {
+		fmt.Println("TLS config failed.")
+		return (err)
+	}
+	for _, v := range endpoints {
+		localendpoint := v.localendpoint
+		relayendpoint := v.relayendpoint
 		controlConnector := startControlConnector(config.Clone(), relayendpoint)
 		go func() {
 			for {
@@ -340,7 +365,6 @@ func action(c *cli.Context) error {
 				}
 			}
 		}()
-
 	}
 	select {}
 	return nil
