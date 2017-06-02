@@ -104,7 +104,7 @@ func mkCert(a *PkiArgs) (pem.Block, pem.Block, error) {
 		NotAfter:  notAfter,
 
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 	}
 	if isX {
@@ -238,6 +238,7 @@ func mkSignedCert(a *PkiArgs) (pem.Block, pem.Block, error) {
 		PublicKey:          publicKey(priv),
 		PublicKeyAlgorithm: x509.RSA,
 		SignatureAlgorithm: x509.SHA256WithRSA,
+
 		//		DNSNames:           []string{""},
 		EmailAddresses: []string{"email"},
 	}
@@ -301,7 +302,7 @@ func mkSignedCert(a *PkiArgs) (pem.Block, pem.Block, error) {
 		NotAfter:     notAfter,
 
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 	}
 

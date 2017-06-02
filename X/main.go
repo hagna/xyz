@@ -106,10 +106,9 @@ func tlsConfig() (*tls.Config, error) {
 		CipherSuites: []uint16{tls.TLS_ECDHE_RSA_WITH_RC4_128_SHA},
 		ClientAuth:   tls.RequireAnyClientCert,
 	}
-	config.BuildNameToCertificate()
 
 	config.InsecureSkipVerify = noverify
-	log.Println("setting config.InsecureSkipVerify = %s", noverify)
+	config.BuildNameToCertificate()
 	/*if *servername != "" {
 		config.ServerName = *servername
 	}

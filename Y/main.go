@@ -105,6 +105,7 @@ func tlsConfig() (*tls.Config, error) {
 	config := &tls.Config{
 		Rand:         rand.Reader,
 		RootCAs:      caCertPool,
+		ClientCAs:    caCertPool,
 		Certificates: []tls.Certificate{cert},
 		CipherSuites: []uint16{tls.TLS_ECDHE_RSA_WITH_RC4_128_SHA},
 		ClientAuth:   tls.RequireAnyClientCert,
