@@ -157,7 +157,7 @@ func main() {
 	app.Flags = []cli.Flag{
 		cli.BoolFlag{Destination: &noverify, Name: "noverify", Usage: "Verify client side certificates"},
 		cli.StringFlag{Destination: &authscript, Name: "auth, as", Usage: "Authorization script", Value: authscript},
-		cli.StringFlag{Destination: &cert_common_name, Name: "name", Usage: "Name of auto generated certificate", Value: cert_common_name},
+		cli.StringFlag{Destination: &cert_common_name, Name: "cname", Usage: "Name of auto generated certificate", Value: cert_common_name},
 		cli.StringFlag{Destination: &privatekey, Name: "key", Usage: "private key", Value: privatekey},
 		cli.StringFlag{Destination: &certificateauthority, Name: "cacert", Usage: "ca cert", Value: certificateauthority},
 		cli.StringFlag{Destination: &certificate, Name: "cert", Usage: "cert file", Value: certificate},
@@ -168,28 +168,6 @@ func main() {
 type LocalServer struct {
 	ln      net.Listener
 	clients []net.Conn
-}
-
-// X is a server and a client; this is the server side. Change here if you want to use sockets instead of tcp
-func handleLocalClient(conn net.Conn, rc *RelayClient, config *tls.Config) {
-	endpoint := rc.session.RemoteAddr().String()
-	//log.Printf("Dialing relay for proxy requests %s\n", endpoint)
-
-	relayconn, err := tls.Dial("tcp", endpoint, config)
-	if err != nil {
-		log.Printf("Error dialing relay: %s", err)
-		conn.Close()
-		return
-	}
-	_, err = xyz.Send(relayconn, rc.token)
-	if err != nil {
-		log.Printf("Error SendingToken: %s", err)
-		conn.Close()
-		relayconn.Close()
-		return
-	}
-	go xyz.ProxyConn(conn, relayconn)
-
 }
 
 // for establishing that control connection to Y
@@ -349,7 +327,7 @@ func action(c *cli.Context) error {
 					continue
 				}
 				if string(message) == "CONNECT" {
-					conn, err := tls.Dial("tcp", relayendpoint, config.Clone())
+					conn, err := xyz.DialRelay(relayendpoint, config.Clone())
 					if err != nil {
 						log.Printf("Error dialing relay: %s", err)
 						continue

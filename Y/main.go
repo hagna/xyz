@@ -153,7 +153,7 @@ func main() {
 				cli.StringFlag{Name: "start-date", Value: "", Usage: "Creation date formatted as Jan 1 15:04:05 2011"},
 
 				cli.StringFlag{Name: "ecdsa-curve", Value: "", Usage: "ECDSA curve to use to generate a key. Valid values are P224, P256, P384, P521"},
-				cli.StringFlag{Destination: &cert_common_name, Name: "name", Usage: "Name of auto generated certificate (not applicable if you use key, cert, cacert)", Value: cert_common_name},
+				cli.StringFlag{Destination: &cert_common_name, Name: "cname", Usage: "Name of auto generated certificate (not applicable if you use key, cert, cacert)", Value: cert_common_name},
 				cli.DurationFlag{Name: "duration", Value: 365 * 24 * time.Hour, Usage: "Duration that certificate is valid for"},
 				cli.BoolFlag{Name: "ca", Usage: "whether this cert should be its own Certificate Authority"},
 				cli.BoolFlag{Name: "x", Usage: "Set OU to X for certs from X"},
@@ -467,7 +467,7 @@ func nRandomBytes64(N uint32) ([]byte, error) {
 func (server *Relay) HandleConn(conn *tls.Conn) {
 	message, err := xyz.RecvWithTimeout(conn, idletimeout)
 	if err != nil {
-		log.Printf("Client \"%v\" did not send quickly enough: %s", conn.RemoteAddr(), err)
+		log.Printf("Error closing \"%v\": %s", conn.RemoteAddr(), err)
 		conn.Close()
 		return
 	}

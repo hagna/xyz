@@ -11,6 +11,7 @@ import (
 	mathrand "math/rand"
 	"net"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -128,6 +129,26 @@ type RelayClient struct {
 	ctl      net.Conn            /* the control connection */
 	connpool map[string]net.Conn /* connections stored by address */
 	session  *yamux.Session      /* use this to create new streams */
+}
+
+// take the server out of server:83984
+func extractServername(ep string) string {
+	res := strings.Split(ep, ":")
+	if len(res) == 2 {
+		return res[0]
+	} else {
+		log.Printf("Could not split \"%s\" on the \":\" so returning \"\" which will break something surely.", ep)
+	}
+	return ""
+}
+
+// Dial the relay; setup the SAN
+func DialRelay(endpoint string, config *tls.Config) (net.Conn, error) {
+	config.ServerName = extractServername(endpoint)
+	if config.ServerName == "" {
+		log.Printf("Missing host part of host:port in \"%s\" something will break.", endpoint)
+	}
+	return tls.Dial("tcp", endpoint, config.Clone())
 }
 
 // A client that backs off when it fails to connect again

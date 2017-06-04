@@ -98,7 +98,7 @@ func mkCert(a *PkiArgs) (pem.Block, pem.Block, error) {
 	template := &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			Organization: []string{"Acme Co"},
+			Organization: []string{"xyz"},
 		},
 		NotBefore: notBefore,
 		NotAfter:  notAfter,

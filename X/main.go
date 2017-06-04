@@ -16,7 +16,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 
 	"time"
@@ -41,6 +40,147 @@ var (
 	ARGV                 *cli.Context                           /* command line */
 	idletimeout          time.Duration = 800 * time.Millisecond /* time to wait for client to say something*/
 )
+
+// urfave/cli boilerplate (it is not my fave)
+func main() {
+	app := cli.NewApp()
+	app.Name = "X"
+	app.Usage = `Make a relayed connection`
+	app.Version = version
+	app.Action = action
+	app.Commands = []cli.Command{
+		{
+			Name:   "newca",
+			Action: xyz.GenerateCA,
+			Flags: []cli.Flag{
+				cli.StringFlag{Name: "host", Usage: "Comma-separated hostnames and IPs to generate a certificate for"},
+
+				cli.StringFlag{Name: "start-date", Value: "", Usage: "Creation date formatted as Jan 1 15:04:05 2011"},
+
+				cli.StringFlag{Name: "ecdsa-curve", Value: "", Usage: "ECDSA curve to use to generate a key. Valid values are P224, P256, P384, P521"},
+				cli.DurationFlag{Name: "duration", Value: 365 * 24 * time.Hour, Usage: "Duration that certificate is valid for"},
+				cli.IntFlag{Name: "rsa-bits", Value: 2048, Usage: "Size of RSA key to generate. Ignored if --ecdsa-curve is set"},
+			},
+		},
+		{
+			Name:   "newcert",
+			Action: xyz.GenerateSignedCertificate,
+			Flags: []cli.Flag{
+				cli.StringFlag{Name: "host", Usage: "Comma-separated hostnames and IPs to generate a certificate for"},
+
+				cli.StringFlag{Name: "start-date", Value: "", Usage: "Creation date formatted as Jan 1 15:04:05 2011"},
+
+				cli.StringFlag{Name: "ecdsa-curve", Value: "", Usage: "ECDSA curve to use to generate a key. Valid values are P224, P256, P384, P521"},
+				cli.DurationFlag{Name: "duration", Value: 365 * 24 * time.Hour, Usage: "Duration that certificate is valid for"},
+				cli.BoolFlag{Name: "ca", Usage: "whether this cert should be its own Certificate Authority"},
+				cli.BoolFlag{Name: "x", Usage: "Set OU to X for certs from X"},
+				cli.IntFlag{Name: "rsa-bits", Value: 2048, Usage: "Size of RSA key to generate. Ignored if --ecdsa-curve is set"},
+			},
+		},
+	}
+	app.ArgsUsage = `[options] <Y endpoint> <local server endpoint (127.0.0.1:8080 for example)> [@name]`
+	app.Flags = []cli.Flag{
+		cli.BoolFlag{Destination: &noverify, Name: "noverify", Usage: "Verify client side certificates"},
+		cli.StringFlag{Destination: &authscript, Name: "auth, as", Usage: "Authorization script", Value: authscript},
+		cli.StringFlag{Destination: &privatekey, Name: "key", Usage: "private key", Value: privatekey},
+		cli.StringFlag{Destination: &cert_common_name, Name: "cname", Usage: "Name of auto generated certificate (not applicable if you use key, cert, cacert)", Value: cert_common_name},
+		cli.StringFlag{Destination: &certificateauthority, Name: "cacert", Usage: "ca cert", Value: certificateauthority},
+		cli.StringFlag{Destination: &certificate, Name: "cert", Usage: "cert file", Value: certificate},
+	}
+	app.Run(os.Args)
+}
+
+type LocalServer struct {
+	ln      net.Listener
+	clients []net.Conn
+}
+
+// X is a server and a client; this is the server side. Change here if you want to use sockets instead of tcp
+func handleLocalClient(endpoint string, conn net.Conn, rc *RelayClient, config *tls.Config, name string) {
+	relayconn, err := xyz.DialRelay(endpoint, config)
+	if err != nil {
+		log.Printf("Error dialing relay: %s", err)
+		conn.Close()
+		return
+	}
+	_, err = xyz.Send(relayconn, rc.token)
+	if err != nil {
+		log.Printf("Error SendingToken: %s", err)
+		conn.Close()
+		relayconn.Close()
+		return
+	}
+
+	_, err = xyz.Send(relayconn, []byte(name))
+	if err != nil {
+		log.Printf("Error sending name: %s", err)
+		conn.Close()
+		relayconn.Close()
+		return
+	}
+	go xyz.ProxyConn(conn, relayconn)
+
+}
+
+// For sending the token request from X to Y
+func makeControlConnection(config *tls.Config, endpoint string) (*RelayClient, error) {
+	mathrand.Seed(time.Now().Unix())
+	conn, err := xyz.DialRelay(endpoint, config.Clone())
+	if err != nil {
+		return nil, err
+	}
+	_, err = xyz.Send(conn, []byte("TOK?"))
+	if err != nil {
+		log.Printf("Error writing token request: %s", err)
+		conn.Close()
+		return nil, err
+	}
+	if authscript != "" {
+		cmd := exec.Command(authscript)
+		out, err := cmd.Output()
+		if err != nil {
+			log.Printf("Could not run authscript \"%s\": %s", authscript, err)
+		} else {
+			_, err = xyz.Send(conn, out)
+			if err != nil {
+				log.Printf("Could not send output of authscript to conn: %s", err)
+			}
+		}
+	}
+	relayclient := new(RelayClient)
+	relayclient.token, err = xyz.RecvWithTimeout(conn, idletimeout)
+	if err != nil {
+		conn.Close()
+		log.Printf("Error reading token: %s", err)
+		return nil, err
+	}
+	conf := yamux.DefaultConfig()
+	conf.KeepAliveInterval = heartbeatinterval
+	conf.EnableKeepAlive = true
+	session, err := yamux.Client(conn, conf)
+	if err != nil {
+		log.Printf("Error setting up yamux client: %s", err)
+		conn.Close()
+		return nil, err
+	}
+	stream, err := session.Open()
+	if err != nil {
+		session.Close()
+		conn.Close()
+		log.Println("Error opening session: %s", err)
+		return nil, err
+	}
+	relayclient.ctl = stream
+	relayclient.session = session
+
+	log.Printf("Connecion established %s %s", relayclient.ctl.LocalAddr(), relayclient.ctl.RemoteAddr())
+	/*
+		x.Lock()
+		x.RelayClients[string(relayclient.token)] = relayclient
+		x.Unlock()
+	*/
+	return relayclient, nil
+}
 
 // either use the given values for cert key and ca or generate them anew
 func getTLScerts(c, k, ca string) ([]byte, []byte, []byte, error) {
@@ -117,161 +257,6 @@ func tlsConfig() (*tls.Config, error) {
 	return config, nil
 }
 
-// urfave/cli boilerplate (it is not my fave)
-func main() {
-	app := cli.NewApp()
-	app.Name = "X"
-	app.Usage = `Make a relayed connection`
-	app.Version = version
-	app.Action = action
-	app.Commands = []cli.Command{
-		{
-			Name:   "newca",
-			Action: xyz.GenerateCA,
-			Flags: []cli.Flag{
-				cli.StringFlag{Name: "host", Usage: "Comma-separated hostnames and IPs to generate a certificate for"},
-
-				cli.StringFlag{Name: "start-date", Value: "", Usage: "Creation date formatted as Jan 1 15:04:05 2011"},
-
-				cli.StringFlag{Name: "ecdsa-curve", Value: "", Usage: "ECDSA curve to use to generate a key. Valid values are P224, P256, P384, P521"},
-				cli.DurationFlag{Name: "duration", Value: 365 * 24 * time.Hour, Usage: "Duration that certificate is valid for"},
-				cli.IntFlag{Name: "rsa-bits", Value: 2048, Usage: "Size of RSA key to generate. Ignored if --ecdsa-curve is set"},
-			},
-		},
-		{
-			Name:   "newcert",
-			Action: xyz.GenerateSignedCertificate,
-			Flags: []cli.Flag{
-				cli.StringFlag{Name: "host", Usage: "Comma-separated hostnames and IPs to generate a certificate for"},
-
-				cli.StringFlag{Name: "start-date", Value: "", Usage: "Creation date formatted as Jan 1 15:04:05 2011"},
-
-				cli.StringFlag{Name: "ecdsa-curve", Value: "", Usage: "ECDSA curve to use to generate a key. Valid values are P224, P256, P384, P521"},
-				cli.DurationFlag{Name: "duration", Value: 365 * 24 * time.Hour, Usage: "Duration that certificate is valid for"},
-				cli.BoolFlag{Name: "ca", Usage: "whether this cert should be its own Certificate Authority"},
-				cli.BoolFlag{Name: "x", Usage: "Set OU to X for certs from X"},
-				cli.IntFlag{Name: "rsa-bits", Value: 2048, Usage: "Size of RSA key to generate. Ignored if --ecdsa-curve is set"},
-			},
-		},
-	}
-	app.ArgsUsage = `[options] <Y endpoint> <local server endpoint (127.0.0.1:8080 for example)> [@name]`
-	app.Flags = []cli.Flag{
-		cli.BoolFlag{Destination: &noverify, Name: "noverify", Usage: "Verify client side certificates"},
-		cli.StringFlag{Destination: &authscript, Name: "auth, as", Usage: "Authorization script", Value: authscript},
-		cli.StringFlag{Destination: &privatekey, Name: "key", Usage: "private key", Value: privatekey},
-		cli.StringFlag{Destination: &cert_common_name, Name: "name", Usage: "Name of auto generated certificate (not applicable if you use key, cert, cacert)", Value: cert_common_name},
-		cli.StringFlag{Destination: &certificateauthority, Name: "cacert", Usage: "ca cert", Value: certificateauthority},
-		cli.StringFlag{Destination: &certificate, Name: "cert", Usage: "cert file", Value: certificate},
-	}
-	app.Run(os.Args)
-}
-
-type LocalServer struct {
-	ln      net.Listener
-	clients []net.Conn
-}
-
-// X is a server and a client; this is the server side. Change here if you want to use sockets instead of tcp
-func handleLocalClient(conn net.Conn, rc *RelayClient, config *tls.Config, name string) {
-	endpoint := rc.session.RemoteAddr().String()
-	//log.Printf("Dialing relay for proxy requests %s\n", endpoint)
-
-	relayconn, err := tls.Dial("tcp", endpoint, config)
-	if err != nil {
-		log.Printf("Error dialing relay: %s", err)
-		conn.Close()
-		return
-	}
-	_, err = xyz.Send(relayconn, rc.token)
-	if err != nil {
-		log.Printf("Error SendingToken: %s", err)
-		conn.Close()
-		relayconn.Close()
-		return
-	}
-
-	_, err = xyz.Send(relayconn, []byte(name))
-	if err != nil {
-		log.Printf("Error sending name: %s", err)
-		conn.Close()
-		relayconn.Close()
-		return
-	}
-	go xyz.ProxyConn(conn, relayconn)
-
-}
-
-// For sending the token request from X to Y
-func makeControlConnection(config *tls.Config, endpoint string) (*RelayClient, error) {
-	mathrand.Seed(time.Now().Unix())
-	conn, err := tls.Dial("tcp", endpoint, config.Clone())
-	if err != nil {
-		return nil, err
-	}
-	_, err = xyz.Send(conn, []byte("TOK?"))
-	if err != nil {
-		log.Printf("Error writing token request: %s", err)
-		conn.Close()
-		return nil, err
-	}
-	if authscript != "" {
-		cmd := exec.Command(authscript)
-		out, err := cmd.Output()
-		if err != nil {
-			log.Printf("Could not run authscript \"%s\": %s", authscript, err)
-		} else {
-			_, err = xyz.Send(conn, out)
-			if err != nil {
-				log.Printf("Could not send output of authscript to conn: %s", err)
-			}
-		}
-	}
-	relayclient := new(RelayClient)
-	relayclient.token, err = xyz.RecvWithTimeout(conn, idletimeout)
-	if err != nil {
-		conn.Close()
-		log.Printf("Error reading token: %s", err)
-		return nil, err
-	}
-	conf := yamux.DefaultConfig()
-	conf.KeepAliveInterval = heartbeatinterval
-	conf.EnableKeepAlive = true
-	session, err := yamux.Client(conn, conf)
-	if err != nil {
-		log.Printf("Error setting up yamux client: %s", err)
-		conn.Close()
-		return nil, err
-	}
-	stream, err := session.Open()
-	if err != nil {
-		session.Close()
-		conn.Close()
-		log.Println("Error opening session: %s", err)
-		return nil, err
-	}
-	relayclient.ctl = stream
-	relayclient.session = session
-
-	log.Printf("Connecion established %s %s", relayclient.ctl.LocalAddr(), relayclient.ctl.RemoteAddr())
-	/*
-		x.Lock()
-		x.RelayClients[string(relayclient.token)] = relayclient
-		x.Unlock()
-	*/
-	return relayclient, nil
-}
-
-// take the server out of server:83984
-func extractServername(ep string) string {
-	res := strings.Split(ep, ":")
-	if len(res) == 2 {
-		return res[0]
-	} else {
-		log.Printf("Could not split \"%s\" on the \":\" so returning \"\" which will break something surely.", ep)
-	}
-	return ""
-}
-
 // for reconnecting the yamux connection, also known as the control channel, to the relay
 func startControlConnector(config *tls.Config, endpoint string) <-chan *RelayClient {
 	rcChan := make(chan *RelayClient)
@@ -286,7 +271,6 @@ func startControlConnector(config *tls.Config, endpoint string) <-chan *RelayCli
 			//lastconnect  time.Time
 			//shortconnect = 10 * time.Second
 		)
-		config.ServerName = extractServername(endpoint)
 	CONNECT:
 		relayclient, err := makeControlConnection(config, endpoint)
 		for {
@@ -341,10 +325,9 @@ func action(c *cli.Context) error {
 			controlConnector := startControlConnector(config.Clone(), relayendpoint)
 			rc := <-controlConnector
 
-			conn, err := tls.Dial("tcp", rc.ctl.RemoteAddr().String(), config)
+			conn, err := xyz.DialRelay(relayendpoint, config)
 			if err != nil {
 				log.Printf("Error dialing relay: %s", err)
-				conn.Close()
 				continue
 			}
 			defer conn.Close()
@@ -415,16 +398,16 @@ func action(c *cli.Context) error {
 			continue
 		}
 		//log.Println("waiting for client connection")
-		go func(ln net.Listener, controlConnector <-chan *RelayClient, config *tls.Config, name string) {
+		go func(endpoint string, ln net.Listener, controlConnector <-chan *RelayClient, config *tls.Config, name string) {
 			for {
 				localconn, err := ln.Accept()
 				if err != nil {
 					log.Printf("Error accepting connection: %s", err)
 				}
 				relayController := <-controlConnector
-				handleLocalClient(localconn, relayController, config, name)
+				handleLocalClient(endpoint, localconn, relayController, config, name)
 			}
-		}(ln, controlConnector, config, name)
+		}(relayendpoint, ln, controlConnector, config, name)
 
 	}
 	select {}
