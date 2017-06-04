@@ -23,7 +23,6 @@ mktgz () {
 }
 
 CGO_ENABLED=0 mktgz linux amd64
-exit
 mktgz darwin amd64
 mktgz freebsd amd64
 mktgz linux arm
