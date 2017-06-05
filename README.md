@@ -1,8 +1,8 @@
-﻿Sometimes a server becomes buried in networks, making it nearly inaccesible to clients.  An observer of this predicament might think, "Is there no *convenient* way for this client to talk to this server?"  There is a way, even a convenient way, for a buried server to talk to a client--but it takes another server.  At least that's the approach taken by the programs here.  A better solution probably invovles time travel to the past to replace IPv4 with IPv6.
+﻿If you are like me, they recently buried a server you often used behind several networks, and you wondered like I did: "Is there no *convenient* way for this client to talk to this server?"
 
-XYZ is the name of this project which is composed of three programs named X, Y, and Z.  
+There is a way, even a convenient way, for a client to talk to a server even if one or the other (or both) is buried in NAT--but it takes another server.  At least that's the approach taken by the programs here.  WebRTC does it too, as does TeamViewer and GoToMyPC.  Of course, a better solution probably invovles time travel to the past to replace IPv4 with IPv6.
 
-XYZ makes it easy to connect two ports on two computers using a relay server.  As easy as X -> Y -> Z. 
+XYZ is the name of this project which is composed of three programs named X, Y, and Z.  It easy to connect two ports on two computers using a relay server. 
 
                   
     client     NAT    relay    NAT     server
@@ -10,7 +10,7 @@ XYZ makes it easy to connect two ports on two computers using a relay server.  A
       X --------|------ Y ------|-------- Z
                 |               |
 
-Figure 1.1 These three programs move or copy a TCP port, an entire TCP port, from one private network to another using a relay program running on a computer that is visible to both computers.
+Figure 1.1 These three programs move or copy a TCP port, an *entire* TCP port, from one private network to another using a relay program running on a computer that is visible to both computers.
 
 
 
@@ -189,7 +189,7 @@ The X and Z programs may connect to more than one Y as well:
     ./X 9.8.7.6:5000 :80 @zBQaIKhYLzbgaH :9090 @24kbrmscmIuYuG 7.6.5.3:5000 :8080 @grog
 
 
-# Commands
+# Commands TODO
 
 The X client can also run commands on Z clients like this:
 
