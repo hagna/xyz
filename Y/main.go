@@ -104,7 +104,10 @@ func tlsConfig() (*tls.Config, error) {
 	}
 	config.InsecureSkipVerify = noverify
 	if !noverify {
-		config.ClientAuth = tls.RequireAndVerifyClientCert
+		if authscript == "" {
+			config.ClientAuth = tls.RequireAndVerifyClientCert
+		}
+
 	}
 	config.BuildNameToCertificate()
 	/*if *servername != "" {
@@ -166,7 +169,12 @@ func main() {
 
 // really main()
 func action(c *cli.Context) error {
-	log.SetFlags(log.Lshortfile)
+	if version == "dev" {
+		log.SetFlags(log.Lshortfile | log.Ltime)
+	}
+	if len(c.Args()) < 1 {
+		log.Fatal("Need at least one argument")
+	}
 	ARGV = c
 	config, err := tlsConfig()
 	if err != nil {

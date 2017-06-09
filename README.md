@@ -1,8 +1,10 @@
-﻿If you are like me, they recently buried a server you often used behind several networks, and you wondered like I did: "Is there no *convenient* way for this client to talk to this server?"
+﻿# Introduction
+
+If you are like me, they recently buried a server you often used behind several networks, and you wondered like I did: "Is there no *convenient* way for this client to talk to this server?"
 
 There is a way, even a convenient way, for a client to talk to a server even if one or the other (or both) is buried in NAT--but it takes another server.  At least that's the approach taken by the programs here.  WebRTC does it too, as does TeamViewer and GoToMyPC.  Of course, a better solution probably invovles time travel to the past to replace IPv4 with IPv6.
 
-XYZ is the name of this project which is composed of three programs named X, Y, and Z.  It easy to connect two ports on two computers using a relay server. 
+XYZ is the name of this project which is composed of three programs named X, Y, and Z, programs that make it easy to connect two computers using a relay server. 
 
                   
     client     NAT    relay    NAT     server

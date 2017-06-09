@@ -166,7 +166,12 @@ type endpoint struct {
 
 // really main()
 func action(c *cli.Context) error {
-	log.SetFlags(log.Lshortfile)
+	if version == "dev" {
+		log.SetFlags(log.Lshortfile | log.Ltime)
+	}
+	if len(c.Args()) < 2 {
+		log.Fatal("Need at least two arguments")
+	}
 	ARGV = c
 	if cmd := c.Args().Get(len(c.Args()) - 1); cmd == "who" {
 		config, err := tlsConfig()
