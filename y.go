@@ -23,13 +23,13 @@ func StartY(config *tls.Config, authscript string, noverify bool, endpoints []st
 	relay.Zclients = make(map[string]*Zclient)
 	go relay.pruneClients()
 	for _, networkendpoint := range endpoints {
-		ln, err := tls.Listen("tcp", networkendpoint, config)
+		ln, err := net.Listen("tcp", networkendpoint)
 		if err != nil {
 			return nil, err
 		}
 		relay.listener = ln
 		//log.Printf("listening on %s\n", ln.Addr().String())
-		go func(ln net.Listener) {
+		go func(ln net.Listener, config *tls.Config) {
 			for {
 				conn, err := ln.Accept()
 				log.Printf("connection %s", conn.RemoteAddr())
@@ -37,14 +37,10 @@ func StartY(config *tls.Config, authscript string, noverify bool, endpoints []st
 					log.Println("error on Accept:", err)
 					continue
 				}
-				tconn, ok := conn.(*tls.Conn)
-				if !ok {
-					log.Println("Not a TLS connection")
-					continue
-				}
-				go relay.HandleConn(authscript, noverify, tconn)
+
+				go relay.HandleConn(authscript, noverify, config, conn)
 			}
-		}(ln)
+		}(ln, config)
 	}
 	return relay, nil
 }
@@ -167,56 +163,50 @@ func (*Relay) Authenticate(authscript string, noverify bool, conn net.Conn) (*au
 			break
 		}
 	}
-	//log.Printf("\tVerified chains:")
-	/*for i, v := range cs.VerifiedChains {
-		//log.Printf("\t\t%d: %+v\n", i, v)
-	}
+
+	/*
+		log.Printf("\tVerified chains:")
+		for i, v := range cs.VerifiedChains {
+			log.Printf("\t\t%d: %+v\n", i, v)
+		}
 	*/
-	verifycert := !noverify
-	if cs.VerifiedChains == nil {
-		if authscript != "" {
-			//log.Println("trying to receive auth")
-			cookie, err := recvWithTimeout(conn, idletimeout)
-			if err != nil { // no auth cookie
-				err2 := fmt.Errorf("Error receiving auth cookie: %s", err)
-				if verifycert {
-					return nil, err2
-				} else {
-					log.Printf("Letting connection continue despite: %s", err2)
-				}
-			} else {
-				cmd := exec.Command(authscript)
-				cmd.Env = os.Environ()
-				cmd.Env = append(cmd.Env, "RemoteAddr="+conn.RemoteAddr().String())
-				cmd.Env = append(cmd.Env, "LocalAddr="+conn.LocalAddr().String())
-				stdin, err := cmd.StdinPipe()
-				if err != nil {
-					return nil, fmt.Errorf("Error writing to stdin of \"%s\": %s", authscript, err)
-				}
-				fmt.Fprintf(stdin, string(cookie))
-				out, err := cmd.Output()
-				if err != nil {
-					return nil, fmt.Errorf("Error on exit \"%s\": %s", authscript, err)
-				}
-				name := string(out)
-				name = strings.TrimSpace(name)
-				conntype := "Z"
-				if strings.Index(name, ":") != -1 {
-					z := strings.Split(name, ":")
-					if len(z) != 2 {
-						return nil, fmt.Errorf("Auth failed: expected type:name in %v", name)
-					}
-					conntype, name = z[0], z[1]
-					if conntype == "X" {
-						authinfo.isX = true
-					}
-				}
-				authinfo.name = name
-			}
+
+	if authscript != "" {
+		//log.Println("trying to receive auth")
+		cookie, err := recvWithTimeout(conn, idletimeout)
+		if err != nil { // no auth cookie
+			return nil, fmt.Errorf("No authscript token: %s", err)
 		} else {
-			if verifycert {
-				return nil, fmt.Errorf("Could not authorize certificate.")
+			log.Printf("running %s", authscript)
+			cmd := exec.Command(authscript)
+			cmd.Env = os.Environ()
+			cmd.Env = append(cmd.Env, "RemoteAddr="+conn.RemoteAddr().String())
+			cmd.Env = append(cmd.Env, "LocalAddr="+conn.LocalAddr().String())
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				return nil, fmt.Errorf("Error writing to stdin of \"%s\": %s", authscript, err)
 			}
+			fmt.Fprintf(stdin, string(cookie))
+			stdin.Close()
+			out, err := cmd.Output()
+			if err != nil {
+				return nil, fmt.Errorf("Error on exit \"%s\": %s", authscript, err)
+			}
+			name := strings.TrimSpace(string(out))
+			log.Printf("from running %s got \"%s\"", authscript, name)
+			name = strings.TrimSpace(name)
+			conntype := "Z"
+			if strings.Index(name, ":") != -1 {
+				z := strings.Split(name, ":")
+				if len(z) != 2 {
+					return nil, fmt.Errorf("Auth failed: expected type:name in %v", name)
+				}
+				conntype, name = z[0], z[1]
+				if conntype == "X" {
+					authinfo.isX = true
+				}
+			}
+			authinfo.name = name
 		}
 	}
 	if authinfo.name == "" {
@@ -308,7 +298,8 @@ func nRandomBytes64(N uint32) ([]byte, error) {
 }
 
 // clients request tokens or send tokens. If using authscript they send a token request and an auth blob.
-func (server *Relay) HandleConn(authscript string, noverify bool, conn *tls.Conn) {
+func (server *Relay) HandleConn(authscript string, noverify bool, config *tls.Config, rawconn net.Conn) {
+	conn := tls.Server(rawconn, config)
 	message, err := recvWithTimeout(conn, idletimeout)
 	if err != nil {
 		log.Printf("Error closing \"%v\": %s", conn.RemoteAddr(), err)

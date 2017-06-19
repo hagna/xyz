@@ -104,7 +104,7 @@ func getTLScerts(c, k, ca string) ([]byte, []byte, []byte, error) {
 		validFor := 365 * 24 * time.Hour
 		validFrom := ""
 		isCA := true
-		log.Println("creating CA")
+		log.Println("Creating CA")
 		cacert, cakey, err := internal.Ca(host, rsaBits, ecdsaCurve, validFrom, validFor)
 		if err != nil {
 			log.Fatalf("failed to create certificate: %s", err)
@@ -113,7 +113,7 @@ func getTLScerts(c, k, ca string) ([]byte, []byte, []byte, error) {
 		if err != nil {
 			log.Fatalf("failed to make ca key pair: %s", err)
 		}
-		log.Println("creating certificate")
+		log.Println("Creating certificate")
 		isCA = false
 		cert, priv, err := internal.CaSignedCert(cert_common_name, host, rsaBits, ecdsaCurve, validFrom, validFor, isCA, isX, &ca_key_pair)
 		if err != nil {
@@ -232,7 +232,13 @@ func action(c *cli.Context) error {
 		name := v.name
 		localendpoint := v.localendpoint
 		relayendpoint := v.relayendpoint
-		_, err := xyz.StartXtls(config.Clone(), localendpoint, relayendpoint, name)
+		var err error
+		if authscript != "" {
+			log.Printf("authscript given %s", authscript)
+			_, err = xyz.StartXauth(config.Clone(), authscript, localendpoint, relayendpoint, name)
+		} else {
+			_, err = xyz.StartXtls(config.Clone(), localendpoint, relayendpoint, name)
+		}
 		if err != nil {
 			log.Printf("Error starting X: %s", err)
 

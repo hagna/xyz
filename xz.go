@@ -97,7 +97,7 @@ func StartXauth(config *tls.Config, authscript, localendpoint, relayendpoint, na
 
 func startX(config *tls.Config, authscript, localendpoint, relayendpoint, name string) (*X, error) {
 	res := new(X)
-	controlConnector := relayReconnector(config.Clone(), "", relayendpoint)
+	controlConnector := relayReconnector(config.Clone(), authscript, relayendpoint)
 	ln, err := net.Listen("tcp", localendpoint)
 	if err != nil {
 		log.Printf("Error listening for local connection: %s", err)
@@ -193,7 +193,11 @@ func relayReconnector(config *tls.Config, authscript, endpoint string) <-chan *r
 				delay = math.Min(delay*factor, maxDelay)
 				delay = mathrand.NormFloat64()*delay*jitter + delay
 				backofftime := (time.Duration(int64(delay*float64(time.Second))) / time.Second) * time.Second
-				log.Printf("Error %s. Trying again in %v", err, backofftime)
+				if err != nil {
+					log.Printf("Error %s. Trying again in %v", err, backofftime)
+				} else {
+					log.Printf("Session closed. Trying again in %v", backofftime)
+				}
 				time.Sleep(backofftime)
 				goto CONNECT
 				/* easier to follow than
@@ -343,11 +347,13 @@ func makeControlConnection(config *tls.Config, authscript, endpoint string) (*re
 		return nil, err
 	}
 	if authscript != "" {
+		log.Printf("running authscript %s", authscript)
 		cmd := exec.Command(authscript)
 		out, err := cmd.Output()
 		if err != nil {
 			log.Printf("Could not run authscript \"%s\": %s", authscript, err)
 		} else {
+			log.Printf("Sending output of script: \"%s\"", string(out))
 			_, err = send(conn, out)
 			if err != nil {
 				log.Printf("Could not send output of authscript to conn: %s", err)
@@ -390,6 +396,7 @@ func makeControlConnection(config *tls.Config, authscript, endpoint string) (*re
 }
 
 func StartZ(config *tls.Config, authscript, localendpoint, relayendpoint string) (*Z, error) {
+	log.Printf("StartZ authscript = \"%v\"", authscript)
 	controlConnector := relayReconnector(config.Clone(), authscript, relayendpoint)
 	go func() {
 		for {

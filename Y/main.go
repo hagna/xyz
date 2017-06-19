@@ -104,9 +104,7 @@ func tlsConfig() (*tls.Config, error) {
 	}
 	config.InsecureSkipVerify = noverify
 	if !noverify {
-		if authscript == "" {
-			config.ClientAuth = tls.RequireAndVerifyClientCert
-		}
+		config.ClientAuth = tls.RequireAndVerifyClientCert
 
 	}
 	config.BuildNameToCertificate()

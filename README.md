@@ -90,7 +90,7 @@ By default, X/Z will verify Y's certificate, but can be disabled with the `-nove
 
 ## Custom Authentication
 
-To perform custom authentication use the `-auth` option.  To illustrate this, we'll run Y and Z on the same server.
+To perform custom authentication use the `-auth` option.  To illustrate this, we'll run Y and Z on the same server. `-auth` implies no `-noverify`
 
 
 Start the relay (Y) with a custom auth script:
@@ -115,40 +115,6 @@ If `checkpassword.sh` exits with 0 authentication proceeds, otherwise authentica
 
 
 Also, the environment variables RemoteAddr and LocalAddr are set to the remote address and local address of the connection in question.
-
-
-## Authentication combinations
-
-Y authenticating X/Z can be combined in many ways.  Here's a sampling:
-
-
-1. Y will authenticate X/Z using `auth.sh`.
-
-        ./Y -noverify -auth auth.sh :5000
-        ./Z -noverify -auth sendauth.sh 9.8.7.6:5000 :443
-        ./X -noverify -auth sendauth.sh 9.8.7.6:5000 :8443
-
-
-2. Y will authenticate X/Z using client-side certificates.
-
-        ./Y ca.crt :5000
-        ./Z -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :443
-        ./X -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :8443
-
-
-3. Y will authenticate X/Z using client certificates first and fall back to `auth.sh` if the certificates do not verify first.
-
-        ./Y -auth auth.sh ca.crt :5000
-        ./Z -noverify -auth sendauth.sh 9.8.7.6:5000 :443
-        ./X -noverify -cert mycert -key mykey -ca ca.crt 9.8.7.6:5000 :8443
-
-
-X/Z can also authenticate Y.  You may have noticed that `-noverify` has been used a lot in these modest examples.  Y can also run with verifiable TLS enabled (as shown in the following command).  Then X/Z clients will verify the server by default (and must be run with -ca):
-
-    ./Y -cert relay.crt -key relay.key -ca ca.crt :5000
-    ./Z -ca ca.crt -cert mycert -key mykey 9.8.7.6:5000 :443
-    ./X -ca ca.crt -cert mycert -key mykey 9.8.7.6:5000 :8443
-
 
 
 ## Z names

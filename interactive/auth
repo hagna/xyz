@@ -8,5 +8,6 @@ if dat.startswith("X"):
 	sys.exit(0)
 if dat.startswith("Z"):
 	print dat[1:]
+        sys.exit(0)
 sys.exit(1)
 
