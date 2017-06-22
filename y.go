@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"github.com/hashicorp/yamux"
+	kcp "github.com/xtaci/kcp-go"
 	"log"
 	"net"
 	"os"
@@ -16,6 +17,9 @@ import (
 	"time"
 )
 
+const dataShards = 10
+const parityShards = 3
+
 // Start the relay on each endpoint of the form host:port listed.
 func StartY(config *tls.Config, authscript string, noverify bool, endpoints []string) (*Relay, error) {
 	relay := new(Relay)
@@ -23,7 +27,7 @@ func StartY(config *tls.Config, authscript string, noverify bool, endpoints []st
 	relay.Zclients = make(map[string]*Zclient)
 	go relay.pruneClients()
 	for _, networkendpoint := range endpoints {
-		ln, err := net.Listen("tcp", networkendpoint)
+		ln, err := kcp.ListenWithOptions(networkendpoint, nil, dataShards, parityShards)
 		if err != nil {
 			return nil, err
 		}

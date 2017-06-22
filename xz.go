@@ -5,6 +5,7 @@ import (
 	"container/list"
 	"crypto/tls"
 	"github.com/hashicorp/yamux"
+	kcp "github.com/xtaci/kcp-go"
 	"io"
 	"log"
 	"math"
@@ -165,11 +166,18 @@ func dialRelay(endpoint string, config *tls.Config) (net.Conn, error) {
 	if config.ServerName == "" {
 		log.Printf("Missing host part of host:port in \"%s\" something will break.", endpoint)
 	}
-	log.Printf("Dialing %s", endpoint)
-	defer log.Printf("Done dialing %s", endpoint)
-	dialer := &net.Dialer{Timeout: relaydialtimeout}
-	return tls.DialWithDialer(dialer, "tcp", endpoint, config.Clone())
-	//return tls.Dial("tcp", endpoint, config.Clone())
+	rawConn, err := kcp.DialWithOptions(endpoint, nil, dataShards, parityShards)
+	if err != nil {
+		return nil, err
+	}
+	return tls.Client(rawConn, config), nil
+	/*
+		log.Printf("Dialing %s", endpoint)
+		defer log.Printf("Done dialing %s", endpoint)
+		dialer := &net.Dialer{Timeout: relaydialtimeout}
+		return tls.DialWithDialer(dialer, "tcp", endpoint, config.Clone())
+		//return tls.Dial("tcp", endpoint, config.Clone())
+	*/
 }
 
 // for reconnecting the yamux connection, also known as the control channel, to the relay
