@@ -27,7 +27,7 @@ const (
 
 var (
 	relaydialtimeout                  = 5 * time.Second        /* time to wait for TLS to establish */
-	relayidletimeout                  = 100 * time.Second      /* idle timeout for the local to relay connection */
+	relayidletimeout                  = 1 * time.Hour          /* idle timeout for the local to relay connection */
 	idletimeout         time.Duration = 800 * time.Millisecond /* time to wait for client to say something*/
 	heartbeatinterval                 = 2 * time.Minute        /* time between beats */
 	pruneclientinterval time.Duration = 1 * time.Minute        /* idle timeout for the local to relay connection */
@@ -43,7 +43,8 @@ type authInfo struct {
 type Relay struct {
 	Xclients map[string]*Xclient /* the connected clients live here */
 	Zclients map[string]*Zclient /* connected Z clients */
-	listener net.Listener        /* the main port where it listens */
+	ctl      net.Listener        /* the control channel */
+	ln       net.Listener        /* the data channel */
 	sync.Mutex
 }
 
@@ -160,8 +161,9 @@ func extractServername(ep string) string {
 	return ""
 }
 
-// Dial the relay; setup the SAN
+// Dial the relay's data connection
 func dialRelay(endpoint string, config *tls.Config) (net.Conn, error) {
+	log.Printf("Dial relay %s", endpoint)
 	config.ServerName = extractServername(endpoint)
 	if config.ServerName == "" {
 		log.Printf("Missing host part of host:port in \"%s\" something will break.", endpoint)
@@ -170,14 +172,23 @@ func dialRelay(endpoint string, config *tls.Config) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tls.Client(rawConn, config), nil
-	/*
-		log.Printf("Dialing %s", endpoint)
-		defer log.Printf("Done dialing %s", endpoint)
-		dialer := &net.Dialer{Timeout: relaydialtimeout}
-		return tls.DialWithDialer(dialer, "tcp", endpoint, config.Clone())
-		//return tls.Dial("tcp", endpoint, config.Clone())
-	*/
+	return tls.Client(rawConn, config.Clone()), nil
+}
+
+// Dial the relay; setup the SAN
+func dialCtl(endpoint string, config *tls.Config) (net.Conn, error) {
+	config.ServerName = extractServername(endpoint)
+	if config.ServerName == "" {
+		log.Printf("Missing host part of host:port in \"%s\" something will break.", endpoint)
+	}
+	log.Printf("Dialing %s", endpoint)
+	dialer := &net.Dialer{Timeout: relaydialtimeout}
+	c, err := tls.DialWithDialer(dialer, "tcp", endpoint, config.Clone())
+	if err != nil {
+		log.Printf("error dialing %s: %s", endpoint, err)
+		return nil, err
+	}
+	return c, nil
 }
 
 // for reconnecting the yamux connection, also known as the control channel, to the relay
@@ -344,7 +355,7 @@ func handleLocalClient(endpoint string, conn net.Conn, rc *relayclient, config *
 // For sending the token request from X to Y
 func makeControlConnection(config *tls.Config, authscript, endpoint string) (*relayclient, error) {
 	mathrand.Seed(time.Now().Unix())
-	conn, err := dialRelay(endpoint, config.Clone())
+	conn, err := dialCtl(endpoint, config)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +388,6 @@ func makeControlConnection(config *tls.Config, authscript, endpoint string) (*re
 	}
 	conf := yamux.DefaultConfig()
 	conf.KeepAliveInterval = heartbeatinterval
-	conf.EnableKeepAlive = true
 	session, err := yamux.Client(conn, conf)
 	if err != nil {
 		log.Printf("Error setting up yamux client: %s", err)
@@ -415,7 +425,7 @@ func StartZ(config *tls.Config, authscript, localendpoint, relayendpoint string)
 				continue
 			}
 			if string(message) == "CONNECT" {
-				conn, err := dialRelay(relayendpoint, config.Clone())
+				conn, err := dialRelay(relayendpoint, config)
 				if err != nil {
 					log.Printf("Error dialing relay: %s", err)
 					continue

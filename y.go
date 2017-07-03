@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"github.com/hashicorp/yamux"
 	kcp "github.com/xtaci/kcp-go"
+	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -20,6 +22,20 @@ import (
 const dataShards = 10
 const parityShards = 3
 
+// accept loop
+func accept(relay *Relay, authscript string, noverify bool, ln net.Listener, config *tls.Config) {
+	for {
+		conn, err := ln.Accept()
+		log.Printf("connection %s", conn.RemoteAddr())
+		if err != nil {
+			log.Println("error on Accept:", err)
+			continue
+		}
+
+		go relay.HandleConn(authscript, noverify, config, conn)
+	}
+}
+
 // Start the relay on each endpoint of the form host:port listed.
 func StartY(config *tls.Config, authscript string, noverify bool, endpoints []string) (*Relay, error) {
 	relay := new(Relay)
@@ -27,24 +43,21 @@ func StartY(config *tls.Config, authscript string, noverify bool, endpoints []st
 	relay.Zclients = make(map[string]*Zclient)
 	go relay.pruneClients()
 	for _, networkendpoint := range endpoints {
-		ln, err := kcp.ListenWithOptions(networkendpoint, nil, dataShards, parityShards)
+		ln, err := net.Listen("tcp", networkendpoint)
 		if err != nil {
 			return nil, err
 		}
-		relay.listener = ln
-		//log.Printf("listening on %s\n", ln.Addr().String())
-		go func(ln net.Listener, config *tls.Config) {
-			for {
-				conn, err := ln.Accept()
-				log.Printf("connection %s", conn.RemoteAddr())
-				if err != nil {
-					log.Println("error on Accept:", err)
-					continue
-				}
+		relay.ctl = ln
+		log.Printf("Listen %s %s\n", ln.Addr().Network(), ln.Addr().String())
 
-				go relay.HandleConn(authscript, noverify, config, conn)
-			}
-		}(ln, config)
+		kcpln, err := kcp.ListenWithOptions(networkendpoint, nil, dataShards, parityShards)
+		if err != nil {
+			return nil, err
+		}
+		relay.ln = kcpln
+		log.Printf("Listen %s %s\n", kcpln.Addr().Network(), kcpln.Addr().String())
+		go accept(relay, authscript, noverify, ln, config)
+		go accept(relay, authscript, noverify, kcpln, config)
 	}
 	return relay, nil
 }
@@ -107,7 +120,7 @@ func (Y *Relay) pruneClients() error {
 		for k, v := range Y.Xclients {
 			v.Lock()
 			if v.session.IsClosed() {
-				//log.Printf("%s has closed so closing connections", v.authinfo.name)
+				log.Printf("%s has closed so closing connections", v.authinfo.name)
 				v.Close()
 				deleteme = append(deleteme, k)
 			}
@@ -121,7 +134,7 @@ func (Y *Relay) pruneClients() error {
 		for k, v := range Y.Zclients {
 			v.Lock()
 			if v.session.IsClosed() {
-				//log.Printf("%s has closed so closing connections", v.authinfo.name)
+				log.Printf("%s has closed so closing connections", v.authinfo.name)
 				v.Close()
 				deleteme = append(deleteme, k)
 			}
@@ -140,8 +153,31 @@ func (Y *Relay) pruneClients() error {
 // for cleaning up and closing down the relay
 func (Y *Relay) Close() error {
 	Y.pruneClients()
-	Y.listener.Close()
+	Y.ln.Close()
+	Y.ctl.Close()
 	return nil
+}
+
+// helper for doing http authenticate returns name or X:name
+func httpAuth(url string) (string, error) {
+	tr := &http.Transport{Dial: (&net.Dialer{Timeout: 5 * time.Second}).Dial}
+	if url[:5] == "https" {
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		tr.TLSHandshakeTimeout = 5 * time.Second
+	}
+	client := &http.Client{Transport: tr}
+	res, err := client.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	out, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return "", err
+	}
+	name := strings.TrimSpace(string(out))
+	return name, nil
+
 }
 
 // conn is type X or Z and it has a name too. We can find out with certs first and then scripts.
@@ -181,22 +217,30 @@ func (*Relay) Authenticate(authscript string, noverify bool, conn net.Conn) (*au
 		if err != nil { // no auth cookie
 			return nil, fmt.Errorf("No authscript token: %s", err)
 		} else {
-			log.Printf("running %s", authscript)
-			cmd := exec.Command(authscript)
-			cmd.Env = os.Environ()
-			cmd.Env = append(cmd.Env, "RemoteAddr="+conn.RemoteAddr().String())
-			cmd.Env = append(cmd.Env, "LocalAddr="+conn.LocalAddr().String())
-			stdin, err := cmd.StdinPipe()
-			if err != nil {
-				return nil, fmt.Errorf("Error writing to stdin of \"%s\": %s", authscript, err)
+			var name string
+			if strings.HasPrefix(authscript, "http://") {
+				name, err = httpAuth(authscript)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				log.Printf("running %s", authscript)
+				cmd := exec.Command(authscript)
+				cmd.Env = os.Environ()
+				cmd.Env = append(cmd.Env, "RemoteAddr="+conn.RemoteAddr().String())
+				cmd.Env = append(cmd.Env, "LocalAddr="+conn.LocalAddr().String())
+				stdin, err := cmd.StdinPipe()
+				if err != nil {
+					return nil, fmt.Errorf("Error writing to stdin of \"%s\": %s", authscript, err)
+				}
+				fmt.Fprintf(stdin, string(cookie))
+				stdin.Close()
+				out, err := cmd.Output()
+				if err != nil {
+					return nil, fmt.Errorf("Error on exit \"%s\": %s", authscript, err)
+				}
+				name = strings.TrimSpace(string(out))
 			}
-			fmt.Fprintf(stdin, string(cookie))
-			stdin.Close()
-			out, err := cmd.Output()
-			if err != nil {
-				return nil, fmt.Errorf("Error on exit \"%s\": %s", authscript, err)
-			}
-			name := strings.TrimSpace(string(out))
 			log.Printf("from running %s got \"%s\"", authscript, name)
 			name = strings.TrimSpace(name)
 			conntype := "Z"
@@ -245,14 +289,12 @@ func (server *Relay) makeControlConnection(authscript string, noverify bool, con
 
 	session, err := yamux.Server(conn, conf)
 	if err != nil {
-		session.Close()
 		conn.Close()
 		return err
 	}
 	stream, err := session.Accept()
 	if err != nil {
 		log.Printf("error accepting stream: %s", err)
-		stream.Close()
 		session.Close()
 		conn.Close()
 		return err
